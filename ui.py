@@ -21,16 +21,6 @@ def build_ui() -> gr.Blocks:
         with gr.Row():
             with gr.Column(scale=1):
                 image_input = gr.Image(label="Upload Image", type="numpy")
-                gr.Examples(
-                    examples=[
-                        "images/raw/bird.jpeg",
-                        "images/raw/vancouver.jpg",
-                        "images/raw/monalisa.png",
-                        "images/raw/Tiger_Berlin.jpg",
-                    ],
-                    inputs=image_input,
-                    label="Try a sample",
-                )
 
                 working_size = gr.Slider(
                     400, 1200, value=800, step=100, label="Working Size (px)",
