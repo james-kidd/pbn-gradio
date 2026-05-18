@@ -331,7 +331,72 @@ DESCRIPTION = """
 *Built by [James Kidd](https://jameskidd.ca) — adjust parameters below to explore the pipeline.*
 """
 
-with gr.Blocks(title="Paint-by-Number Generator") as demo:
+CSS = """
+/* ── Layout ── */
+.gradio-container {
+    max-width: 1200px !important;
+    margin: 0 auto !important;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+    background: #f8fafc !important;
+}
+
+/* ── Header / description ── */
+.prose h1 { font-size: 1.75rem; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
+.prose h3 { font-size: 0.95rem; font-weight: 600; color: #0f172a; margin-top: 1rem; }
+.prose p, .prose li { color: #475569; font-size: 0.9rem; }
+.prose strong { color: #0f172a; }
+.prose a { color: #2563eb; text-decoration: none; }
+.prose a:hover { text-decoration: underline; }
+
+/* ── Panels ── */
+.gr-panel, .gr-box, .gr-form, .gr-block {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 14px !important;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.06) !important;
+}
+
+/* ── Inputs / sliders ── */
+label span { color: #0f172a !important; font-size: 0.8rem !important; font-weight: 600 !important; }
+.gr-slider input[type=range]::-webkit-slider-thumb { background: #2563eb; }
+.gr-slider input[type=range]::-webkit-slider-runnable-track { background: #e5e7eb; }
+
+/* ── Radio buttons ── */
+input[type=radio]:checked { accent-color: #2563eb; }
+
+/* ── Accordion ── */
+.gr-accordion { border: 1px solid #e5e7eb !important; border-radius: 10px !important; }
+.gr-accordion > .label-wrap { color: #475569 !important; font-size: 0.85rem !important; }
+
+/* ── Tabs ── */
+.tab-nav button {
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    color: #475569 !important;
+    border-bottom: 2px solid transparent !important;
+}
+.tab-nav button.selected {
+    color: #2563eb !important;
+    border-bottom-color: #2563eb !important;
+}
+
+/* ── Primary button ── */
+button.primary {
+    background: #2563eb !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    letter-spacing: 0.01em !important;
+    box-shadow: none !important;
+}
+button.primary:hover { background: #1e40af !important; }
+
+/* ── Hide Gradio footer ── */
+footer { display: none !important; }
+"""
+
+with gr.Blocks(title="Paint-by-Number Generator", css=CSS) as demo:
     gr.Markdown(DESCRIPTION)
 
     with gr.Row():
