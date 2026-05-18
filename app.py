@@ -1,3 +1,18 @@
+"""
+Paint-by-Number Generator
+=========================
+Deterministic image-to-paint-by-number pipeline using classical computer vision.
+
+Pipeline stages:
+    1. Preprocessing  — resize, RGB→CIELAB, bilateral filtering
+    2. Segmentation   — SLIC superpixels + RAG merging (or Felzenszwalb)
+    3. Palette        — k-means clustering of region means in LAB space
+    4. Finalization   — connected-component analysis for contiguous regions
+    5. Rendering      — contour extraction, distance-transform number placement
+
+All color operations are performed in CIELAB space for perceptual uniformity.
+"""
+
 import numpy as np
 import cv2
 import gradio as gr
@@ -7,9 +22,10 @@ from skimage.measure import label as cc_label, regionprops
 from sklearn.cluster import KMeans
 
 
-# ── Preprocessing ─────────────────────────────────────────────
+# ── 1. Preprocessing ──────────────────────────────────────────
 
-def load_and_resize(img_rgb, max_dim=800):
+def load_and_resize(img_rgb: np.ndarray, max_dim: int = 800) -> np.ndarray:
+    """Resize so the longest edge equals max_dim (no upscaling)."""
     h, w = img_rgb.shape[:2]
     scale = max_dim / max(h, w)
     if scale < 1.0:
@@ -18,7 +34,14 @@ def load_and_resize(img_rgb, max_dim=800):
     return img_rgb
 
 
-def preprocess_rgb(img_rgb):
+def preprocess_rgb(img_rgb: np.ndarray) -> np.ndarray:
+    """
+    Convert RGB → CIELAB and apply bilateral filtering.
+
+    CIELAB is perceptually uniform: equal Euclidean distances correspond to
+    approximately equal perceived color differences, making it well-suited for
+    segmentation. The bilateral filter smooths noise while preserving edges.
+    """
     img_float = img_rgb.astype("float32") / 255.0
     img_lab = color.rgb2lab(img_float)
     l, a, b = cv2.split(img_lab.astype("float32"))
@@ -28,10 +51,29 @@ def preprocess_rgb(img_rgb):
     return img_lab
 
 
-# ── Segmentation ──────────────────────────────────────────────
+# ── 2. Segmentation ───────────────────────────────────────────
 
-def segment_image(img_lab, n_superpixels, compactness, sigma,
-                  rag_merge_thresh, min_area, method):
+def segment_image(
+    img_lab: np.ndarray,
+    n_superpixels: int,
+    compactness: float,
+    sigma: float,
+    rag_merge_thresh: float,
+    min_area: int,
+    method: str,
+) -> tuple[np.ndarray, int]:
+    """
+    Segment the image into superpixels then merge adjacent similar regions.
+
+    SLIC (Simple Linear Iterative Clustering) clusters pixels in the joint
+    5D LAB+XY space. The compactness parameter controls the trade-off between
+    color adherence and spatial regularity. A Region Adjacency Graph is then
+    built and regions whose mean-color distance falls below rag_merge_thresh
+    are collapsed — producing clean, paintable boundaries.
+
+    Felzenszwalb's method uses a minimum spanning tree formulation as an
+    alternative single-pass approach.
+    """
     if method == "felzenszwalb":
         scale = max(50, 400 - n_superpixels / 10)
         labels = felzenszwalb(img_lab, scale=scale, sigma=0.5, min_size=min_area)
@@ -52,9 +94,24 @@ def segment_image(img_lab, n_superpixels, compactness, sigma,
     return labels, min_area
 
 
-# ── Palette Extraction ────────────────────────────────────────
+# ── 3. Palette Extraction ─────────────────────────────────────
 
-def quantize_palette(img_lab, labels, k):
+def quantize_palette(
+    img_lab: np.ndarray,
+    labels: np.ndarray,
+    k: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Reduce the segmented image to k colors via k-means on region LAB means.
+
+    Clustering in LAB ensures perceptually balanced grouping: colors that look
+    similar to the human eye are grouped together regardless of their raw
+    channel values in RGB.
+
+    Returns:
+        indexed: label array where each pixel value is its palette index
+        cluster_centers: (k, 3) array of palette colors in LAB
+    """
     region_ids = np.unique(labels)
     region_means = np.array(
         [img_lab[labels == rid].mean(axis=0) for rid in region_ids]
@@ -69,9 +126,20 @@ def quantize_palette(img_lab, labels, k):
     return indexed, km.cluster_centers_
 
 
-# ── Region Finalization ───────────────────────────────────────
+# ── 4. Region Finalization ────────────────────────────────────
 
-def final_connectivity(img_indexed, min_area):
+def final_connectivity(
+    img_indexed: np.ndarray,
+    min_area: int,
+) -> tuple[np.ndarray, dict]:
+    """
+    Enforce spatial contiguity via 8-connected component analysis.
+
+    After palette quantization, pixels sharing a color index may be
+    non-contiguous. This step splits them into separate labeled regions,
+    discards fragments below min_area / 2, and builds a mapping from each
+    region label to its palette color index.
+    """
     final = np.zeros_like(img_indexed, dtype=np.int32)
     region_to_color = {}
     rid = 1
@@ -89,9 +157,10 @@ def final_connectivity(img_indexed, min_area):
     return final, region_to_color
 
 
-# ── Rendering ─────────────────────────────────────────────────
+# ── 5. Rendering ──────────────────────────────────────────────
 
-def lab_to_rgb_uint8(lab_center):
+def lab_to_rgb_uint8(lab_center: np.ndarray) -> np.ndarray:
+    """Convert a single LAB color to uint8 RGB."""
     lab_pixel = np.array(
         [[[lab_center[0], lab_center[1], lab_center[2]]]], dtype="float32"
     )
@@ -99,7 +168,18 @@ def lab_to_rgb_uint8(lab_center):
     return np.clip(rgb * 255, 0, 255).astype(np.uint8)
 
 
-def render_outputs(final_labels, palette_lab, region_to_color):
+def render_outputs(
+    final_labels: np.ndarray,
+    palette_lab: np.ndarray,
+    region_to_color: dict,
+) -> tuple[np.ndarray, np.ndarray, list, np.ndarray]:
+    """
+    Produce the filled color image and the numbered outline template.
+
+    Region numbers are placed at the distance transform maximum — the point
+    geometrically farthest from all region boundaries — ensuring labels are
+    readable and unclipped.
+    """
     h, w = final_labels.shape
     fill_img = np.zeros((h, w, 3), dtype=np.uint8)
     outline_img = np.full((h, w, 3), 255, dtype=np.uint8)
@@ -130,7 +210,11 @@ def render_outputs(final_labels, palette_lab, region_to_color):
     return fill_img, outline_img, number_data, palette_rgb
 
 
-def draw_numbers_on_outline(outline_img, number_data):
+def draw_numbers_on_outline(
+    outline_img: np.ndarray,
+    number_data: list,
+) -> np.ndarray:
+    """Render palette index numbers onto the outline template."""
     result = outline_img.copy()
     font = cv2.FONT_HERSHEY_SIMPLEX
     for x, y, n in number_data:
@@ -144,11 +228,14 @@ def draw_numbers_on_outline(outline_img, number_data):
     return result
 
 
-def draw_palette_swatch(palette_rgb, palette_size):
+def draw_palette_swatch(palette_rgb: np.ndarray, palette_size: int) -> np.ndarray:
+    """Render a labeled grid of palette color swatches."""
     sw, sh, pad = 60, 60, 4
     cols = min(palette_size, 12)
     rows = (palette_size + cols - 1) // cols
-    img = np.full((rows * (sh + pad) + pad, cols * (sw + pad) + pad, 3), 40, dtype=np.uint8)
+    img = np.full(
+        (rows * (sh + pad) + pad, cols * (sw + pad) + pad, 3), 40, dtype=np.uint8
+    )
     font = cv2.FONT_HERSHEY_SIMPLEX
 
     for i, rgb in enumerate(palette_rgb[:palette_size]):
@@ -168,7 +255,8 @@ def draw_palette_swatch(palette_rgb, palette_size):
     return img
 
 
-def render_segmentation_overlay(img_rgb, labels):
+def render_segmentation_overlay(img_rgb: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """Overlay segmentation boundaries on the original image."""
     boundaries = segmentation.mark_boundaries(
         img_rgb.astype("float32") / 255.0, labels, color=(1, 0.2, 0.2), mode="thick"
     )
@@ -177,8 +265,17 @@ def render_segmentation_overlay(img_rgb, labels):
 
 # ── Full Pipeline ─────────────────────────────────────────────
 
-def run_pipeline(image, working_size, palette_size, n_superpixels,
-                 compactness, sigma, rag_merge_thresh, method):
+def run_pipeline(
+    image: np.ndarray,
+    working_size: int,
+    palette_size: int,
+    n_superpixels: int,
+    compactness: float,
+    sigma: float,
+    rag_merge_thresh: float,
+    method: str,
+) -> tuple:
+    """Execute the full five-stage pipeline and return UI outputs."""
     if image is None:
         raise gr.Error("Upload an image to begin.")
 
@@ -207,7 +304,7 @@ def run_pipeline(image, working_size, palette_size, n_superpixels,
 
     stats = (
         f"**Pipeline Stats**\n\n"
-        f"- Input resized to: {w} x {h}\n"
+        f"- Input resized to: {w} × {h}\n"
         f"- Superpixel regions: {n_regions_after_seg}\n"
         f"- Palette colors: {int(palette_size)}\n"
         f"- Final paint regions: {n_final_regions}\n"
@@ -271,15 +368,15 @@ with gr.Blocks(title="Paint-by-Number Generator") as demo:
             with gr.Accordion("Advanced Parameters", open=False):
                 compactness = gr.Slider(
                     1, 30, value=12, step=1, label="SLIC Compactness",
-                    info="Higher = more regular shapes",
+                    info="Higher = more regular shapes (less color-sensitive)",
                 )
                 sigma_slider = gr.Slider(
                     0.5, 5.0, value=2.0, step=0.5, label="SLIC Sigma",
-                    info="Gaussian smoothing before segmentation",
+                    info="Gaussian smoothing applied before segmentation",
                 )
                 rag_merge_thresh = gr.Slider(
                     2.0, 30.0, value=10.0, step=1.0, label="RAG Merge Threshold",
-                    info="Color distance threshold for merging adjacent regions",
+                    info="LAB color distance threshold for merging adjacent regions",
                 )
 
             run_btn = gr.Button(
