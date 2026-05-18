@@ -7,5 +7,6 @@ build/
 .env
 static/uploads/
 flagged/
-images/
-images/raw/
+images/*
+!images/raw/
+!images/raw/**
