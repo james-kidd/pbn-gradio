@@ -140,6 +140,89 @@ Two honest readings of this:
 
 The ablation measures how much the extra families *change* the answer, not whether they make it *correct*. Without ground truth that is the strongest claim available.
 
+---
+
+## Incremental Siting — the SimCity question
+
+Given the roads and structures that already exist, **where do we add next?**
+
+SimCity's real mechanic was never "classify the land." It was that the network you have already built determines what is cheap to build next. Every placement rewrites the cost of the next one. That mechanic maps onto machinery already here:
+
+| Existing piece | Role in siting |
+|---|---|
+| Regions | The planning unit — a parcel, not a pixel |
+| Land classes | A **traversal cost surface** ($/m to run a corridor) |
+| Region adjacency | What each parcel borders, and what blocks approach |
+| Distance transform | The parcel's point of **maximum setback** |
+
+That last one is the neatest reuse. In paint-by-number, the distance-transform maximum is where a digit is most readable — the point furthest from every boundary. That is the same point where you would site a structure for maximum setback. Identical computation, and it happens to answer a real question.
+
+The one genuinely new piece is **least-cost path routing** (`skimage.graph.MCP_Geometric`) — standard GIS corridor practice, and the first core algorithm in this project not invented here. That matters: it is the part of the stack that needs no defending.
+
+### The loop
+
+1. Build a cost surface from land classes — right-of-way is cheap to follow, canopy needs clearing, water needs a structure.
+2. Seed the network from detected roads.
+3. Compute cost-to-connect for **every pixel at once** (`find_costs` from all network pixels).
+4. Score candidate parcels: usable size, shape regularity, connection cost, preparation cost, unobstructed approach.
+5. Place the best one, route its corridor, **add that corridor to the network** at reduced traversal cost.
+6. Repeat. The surface has changed, so the ranking has changed.
+
+Each site also records what it *would* have cost built first. The gap between the two is the measurable value of sequencing — on the test scene, 8–12% of total connection cost, and visibly so: later corridors join earlier ones instead of running their own line to the road.
+
+### A bug worth recording
+
+Site anchors initially landed **on the frame edge** with roughly double their true inscribed radius. `cv2.distanceTransform` treats the image border as open ground, so any parcel touching it measures setback only against interior boundaries. Padding the mask by one zero pixel before the transform fixes it.
+
+This was not cosmetic. It moved total connection cost from $37,457 to $21,284 and corridor length from 489 m to 283 m on the same frame — the anchors were being pushed to the survey edge, the one place a facility demonstrably should not go, since nothing is known about what lies beyond. Fully interior parcels were unaffected, which is what made it easy to confirm.
+
+*(The same subtlety exists in the paint-by-number number placement, where the consequence is only a digit printed near the edge. That output is left unchanged.)*
+
+---
+
+## Critical assessment — where the abstraction actually holds
+
+Being honest about the three applications, because they are not equally strong.
+
+### What the pipeline is genuinely good at
+
+**RAG merging is the strongest component.** SLIC over-segments; the region adjacency graph is what turns thousands of superpixels into a few dozen coherent, contiguous regions with smooth boundaries. Almost everything useful downstream depends on that merge, not on SLIC itself.
+
+**The RAG is a graph, and that was underused.** Paint-by-number used it to merge. Land-use used it for adjacency features. Siting uses it as the structure a plan reasons over — which is the most complete use of what the pipeline already builds.
+
+**Deterministic and fast.** No training, no GPU, no weights. The same input gives the same answer, which is what makes an auditable quote or a reproducible plan possible at all.
+
+### Ranking the three applications honestly
+
+| Application | Ground truth available? | Verdict |
+|---|---|---|
+| Paint by Number | Yes — the original image | **Strongest.** Well-posed, output checkable by eye. |
+| Incremental Siting | Partially — routing is exact | **Useful as screening.** Exact algorithm on an unvalidated surface. |
+| Land Use & Cost | No | **Weakest.** Interesting as a feature layer; unvalidated as a classifier. |
+
+The ordering tracks one thing: **whether the application has an objective quality metric.** Paint-by-number can be scored against the original image. Routing can be verified against a known cost surface. Land-use classification cannot be scored at all here — the rules were reasoned out, never fitted, and there is no labelled imagery to check them against. That is why it stays framed as an interpretable feature layer rather than a classifier.
+
+### Where SLIC is the wrong tool
+
+- **SLIC's compactness constraint fights real parcel boundaries.** It is designed to produce compact, similarly-sized superpixels. Land parcels are neither. For planning specifically, Felzenszwalb or watershed — which follow image structure rather than imposing regularity — are arguably the better primitive, which is why both segmentation methods stay exposed.
+- **Thin structures get absorbed.** A two-pixel track disappears into its surroundings under any compactness setting worth using. Roads survive here only because they are drawn wide.
+- **Gradients become bands.** On smoothly-varying imagery, quantization produces contour banding rather than meaningful regions.
+
+### Alternatives, and when they win
+
+| Alternative | When it beats this |
+|---|---|
+| Plain k-means / median-cut quantization | Never for regions — no spatial coherence, so output is speckled and non-contiguous. Fine for palettes alone. |
+| Watershed / Felzenszwalb | Parcel-like segmentation where following real boundaries matters more than uniform region size. |
+| SAM or a trained segmentation net | When you need *semantic* objects and have a GPU. Overkill here, non-deterministic, and it answers "what object is this" rather than "what contiguous area shares a property". |
+| A published GIS layer | **Beats our classifier outright for siting.** Municipal road centrelines and parcel boundaries are authoritative, free, and already vector. |
+
+That last row is the important one and worth stating plainly: for the siting application, **the correct move in production is to not classify at all.** Take the roads layer from open data, take parcels from the assessor, and use this pipeline only for what no public layer provides — the traversal cost surface over undeveloped ground. The architecture already supports that, because routing consumes a cost surface without caring where it came from.
+
+### The honest summary
+
+This is a **screening and feature-extraction layer**, not a decision system. It is at its best when it narrows a large set of candidates to a small set worth a human's attention with real data, and at its worst when its unvalidated middle layer is mistaken for a measurement.
+
 ### Where this goes
 
 Two directions, one better supported than the other.

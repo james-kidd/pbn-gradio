@@ -10,15 +10,18 @@ from land_use import (
     default_rate_table,
     run_land_use,
 )
+from siting import PLAN_TABLE_HEADERS, run_siting
 
 CSS = (Path(__file__).parent / "style.css").read_text()
 
 DESCRIPTION = """
 # Region Segmentation Toolkit
 
-Two things built on the same segmentation core: a paint-by-number generator,
-and an experiment in labelling those same regions by what they are and what
-they would cost to work.
+One segmentation core, three applications. **Paint by Number** renders a
+printable template. **Land Use & Cost** labels those same regions and prices
+them. **Incremental Siting** asks the SimCity question — given the roads and
+structures that already exist, where do we add next, and what does connecting
+it cost?
 
 *Built by [James Kidd](https://jameskidd.ca)*
 """
@@ -231,6 +234,136 @@ def _land_use_tab() -> None:
     )
 
 
+SITING_INTRO = """
+### What this is
+
+The SimCity question: given what already exists, **where do we add next?**
+
+SimCity's real mechanic was never "classify the land" — it was that the network
+you have already built determines what is cheap to build next. Every placement
+rewrites the cost of the next one.
+
+That maps onto machinery already here. Regions are the planning unit. Land
+classes become a **traversal cost surface** — an existing right-of-way is an
+order of magnitude cheaper to follow than mature canopy, and water needs a
+structure. The distance transform that placed paint-by-number digits at the most
+readable point inside a region places a site at its point of **maximum setback**,
+which is the same computation answering a real question.
+
+The one new piece is least-cost path routing (`skimage.graph.MCP_Geometric`) —
+standard GIS practice, and the first core algorithm in this project not invented
+here. After each placement its corridor becomes a right-of-way the next build
+can tap, so the surface is recomputed and the ranking genuinely changes.
+
+Each site also reports what it *would* have cost built first. The gap between
+the two is the measurable value of sequencing.
+"""
+
+SITING_CAVEATS = """
+**Routing is exact; the surface under it is not.** The cheapest corridor across a
+given cost surface is computed correctly and you can check it against the image
+by eye. Where that surface comes from is the unvalidated classifier — and that is
+the *swappable* part: feed in a published road centreline layer and the routing
+is production-grade unchanged.
+
+**No elevation.** A single RGB frame cannot see slope, and slope dominates real
+trenching cost. **No ownership, zoning, easements or grid capacity** either — any
+of which can veto the site this ranks first. Use it to narrow many parcels to a
+few worth real diligence, not to choose one.
+"""
+
+
+def _siting_tab() -> None:
+    gr.Markdown(SITING_INTRO)
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            image_input = gr.Image(label="Upload Image", type="numpy")
+
+            ground_resolution = gr.Number(
+                value=0.5, minimum=0.001, label="Ground Resolution (m/px)",
+                info="Corridor lengths and costs scale linearly with this",
+            )
+            rounds = gr.Slider(
+                1, 10, value=4, step=1, label="Sites to place",
+                info="Each placement grows the network before the next is chosen",
+            )
+            min_area_ha = gr.Number(
+                value=0.05, minimum=0.001, label="Minimum parcel size (ha)",
+            )
+            target_area_ha = gr.Number(
+                value=2.0, minimum=0.01, label="Target parcel size (ha)",
+                info="Size at which a parcel scores full marks for usable area",
+            )
+
+            with gr.Accordion("Cost & segmentation parameters", open=False):
+                connection_budget = gr.Number(
+                    value=40000, minimum=1, label="Connection budget ($)",
+                    info="Cost at which a site scores zero for accessibility",
+                )
+                corridor_cost = gr.Number(
+                    value=15.0, minimum=0.1, label="Built corridor cost ($/m)",
+                    info="Traversal cost of a corridor once built — this is what "
+                         "makes later builds cheaper",
+                )
+                working_size = gr.Slider(
+                    400, 1200, value=800, step=100, label="Working Size (px)",
+                )
+                n_superpixels = gr.Slider(
+                    200, 3000, value=800, step=100, label="Superpixels",
+                )
+                rag_merge_thresh = gr.Slider(
+                    2.0, 30.0, value=8.0, step=1.0, label="RAG Merge Threshold",
+                )
+                method = gr.Radio(
+                    ["slic", "felzenszwalb"], value="slic",
+                    label="Segmentation Method",
+                )
+
+            run_btn = gr.Button("Plan the build", variant="primary", size="lg")
+
+        with gr.Column(scale=2):
+            report_output = gr.Markdown()
+
+            with gr.Tabs():
+                with gr.Tab("Build Plan"):
+                    plan_output = gr.Image(
+                        label="Sites numbered in build order; corridors in yellow, "
+                              "existing network in cyan",
+                    )
+                with gr.Tab("Connection Cost"):
+                    connection_output = gr.Image(
+                        label="What it would cost to connect at every point — "
+                              "dark is cheap, bright is expensive",
+                    )
+
+            gr.Markdown("#### Build order")
+            plan_table = gr.Dataframe(headers=PLAN_TABLE_HEADERS, wrap=True, label=None)
+
+            gr.Markdown(
+                "#### Plan export\n"
+                "CSV of the build order, plus GeoJSON of sites and corridors. "
+                "Coordinates are image pixels — the moment a frame carries a geo "
+                "transform, this is the format a GIS opens."
+            )
+            export_output = gr.File(label=None, file_count="multiple")
+
+            gr.Markdown(SITING_CAVEATS)
+
+    run_btn.click(
+        fn=run_siting,
+        inputs=[
+            image_input, working_size, ground_resolution, n_superpixels,
+            rag_merge_thresh, method, rounds, min_area_ha, target_area_ha,
+            connection_budget, corridor_cost,
+        ],
+        outputs=[
+            connection_output, plan_output, report_output,
+            plan_table, export_output,
+        ],
+    )
+
+
 def build_ui() -> gr.Blocks:
     with gr.Blocks(title="Region Segmentation Toolkit", css=CSS) as demo:
         gr.Markdown(DESCRIPTION)
@@ -240,5 +373,7 @@ def build_ui() -> gr.Blocks:
                 _paint_by_number_tab()
             with gr.Tab("Land Use & Cost"):
                 _land_use_tab()
+            with gr.Tab("Incremental Siting"):
+                _siting_tab()
 
     return demo
