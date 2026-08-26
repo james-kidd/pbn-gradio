@@ -10,6 +10,7 @@ from land_use import (
     default_rate_table,
     run_land_use,
 )
+from segmenters import INTERCHANGEABLE
 from siting import PLAN_TABLE_HEADERS, run_siting
 
 CSS = (Path(__file__).parent / "style.css").read_text()
@@ -316,8 +317,11 @@ def _siting_tab() -> None:
                     2.0, 30.0, value=8.0, step=1.0, label="RAG Merge Threshold",
                 )
                 method = gr.Radio(
-                    ["slic", "felzenszwalb"], value="slic",
-                    label="Segmentation Method",
+                    list(INTERCHANGEABLE), value="felzenszwalb",
+                    label="Segmentation Backend",
+                    info="Felzenszwalb follows real boundaries, which suits "
+                         "parcels. SLIC enforces uniform size — better for "
+                         "paint-by-number than for planning.",
                 )
 
             run_btn = gr.Button("Plan the build", variant="primary", size="lg")
@@ -348,7 +352,9 @@ def _siting_tab() -> None:
             )
             export_output = gr.File(label=None, file_count="multiple")
 
+            certificate_output = gr.Markdown()
             topology_output = gr.Markdown()
+            provenance_output = gr.Markdown()
 
             gr.Markdown(SITING_CAVEATS)
 
@@ -362,6 +368,7 @@ def _siting_tab() -> None:
         outputs=[
             connection_output, plan_output, report_output,
             plan_table, export_output, topology_output,
+            certificate_output, provenance_output,
         ],
     )
 

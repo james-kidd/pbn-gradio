@@ -52,7 +52,10 @@ from land_use import (
     extract_features,
     fill_unlabelled,
 )
-from pipeline import load_and_resize, preprocess_rgb, segment_image
+import segmenters
+from geo import GeoContext
+from optimize import budgeted_selection, format_certificate
+from pipeline import load_and_resize, preprocess_rgb
 from topology import (
     build_region_graph,
     check_planarity,
@@ -98,7 +101,8 @@ class Site:
     point: tuple[int, int]        # (row, col) of maximum setback
     area_ha: float
     inscribed_radius_px: float
-    connection_cost: float = 0.0
+    connection_cost: float = 0.0   # working value; re-scored for the certificate
+    planned_cost: float = 0.0      # cost at the moment it was placed
     baseline_cost: float = 0.0     # cost against the *original* network
     route: list[tuple[int, int]] = field(default_factory=list)
     route_length_m: float = 0.0
@@ -291,6 +295,7 @@ def plan_build_order(
         best.route = [(int(r), int(c)) for r, c in route]
         best.route_length_m = _route_length_m(best.route, m_per_px)
         best.build_order = round_no
+        best.planned_cost = best.connection_cost
         placed.append(best)
         remaining.remove(best)
 
@@ -513,15 +518,22 @@ def run_siting(
     original_max_dim = max(image.shape[:2])
     img_rgb = load_and_resize(image, int(working_size))
     h, w = img_rgb.shape[:2]
-    scale = original_max_dim / max(h, w)
-    m_per_px = float(ground_resolution) * scale
+
+    # One place converts pixels to ground truth, including the resize factor.
+    # Swap this constructor for `GeoContext.from_affine` and every area, length
+    # and dollar below becomes real without touching the code that uses them.
+    ctx = GeoContext.from_scale(ground_resolution, original_max_dim / max(h, w))
+    m_per_px = ctx.m_per_px
 
     img_lab = preprocess_rgb(img_rgb)
-    labels, _ = segment_image(
-        img_lab, int(n_superpixels), 10.0, 2.0,
-        rag_merge_thresh, int(h * w * 0.001), method,
+    seg = segmenters.segment(
+        img_lab, backend=method,
+        merge_threshold=rag_merge_thresh,
+        min_area=int(h * w * 0.001),
+        fill=True,
+        n_segments=int(n_superpixels), compactness=10.0, sigma=2.0,
     )
-    labels = fill_unlabelled(labels)
+    labels = seg.labels
 
     features = extract_features(img_rgb, img_lab, labels)
     if not features:
@@ -567,6 +579,37 @@ def run_siting(
         cost_surface, network, [s.point for s in placed],
     )
 
+    # ── Selection certificate ─────────────────────────────────
+    # Re-score every candidate on the *same* basis — connection cost against
+    # the original network — so the LP compares like with like. Scores taken
+    # mid-plan would each reflect a different network state.
+    for s in sites:
+        s.connection_cost = s.baseline_cost
+    score_sites(sites, features, float(target_area_ha), float(connection_budget))
+
+    site_costs = [
+        s.baseline_cost
+        + LAND_CLASSES[CLASS_INDEX[s.class_key]].base_rate * s.area_ha
+        for s in sites
+    ]
+    placed_ids = {id(s) for s in placed}
+    chosen_idx = [i for i, s in enumerate(sites) if id(s) in placed_ids]
+
+    # The budget is what the plan actually spent, which makes the question
+    # "did greedy spend this money well?" rather than the vaguer "was this a
+    # good plan?" — a question the LP can answer exactly.
+    budget = sum(site_costs[i] for i in chosen_idx)
+    certificate = budgeted_selection(
+        [max(0.0, s.score) for s in sites], site_costs, budget, chosen_idx,
+    )
+    certificate_report = format_certificate(
+        certificate, [s.label for s in sites], chosen_idx,
+    )
+
+    # Restore the planned costs, which the table and report describe.
+    for s in placed:
+        s.connection_cost = s.planned_cost
+
     mcp = graph.MCP_Geometric(cost_surface)
     cum, _ = mcp.find_costs(_seed_indices(network))
 
@@ -579,8 +622,14 @@ def run_siting(
         planarity, degeneracy, n_rounds, colouring_valid,
         sum(1 for s in placed if s.holes), steiner, achieved,
     )
+    provenance = (
+        f"*Segmentation: {seg.describe()} · Ground truth: {ctx.describe()}*"
+    )
 
-    return connection_map, plan_image, report, table, export, topology_report
+    return (
+        connection_map, plan_image, report, table, export,
+        topology_report, certificate_report, provenance,
+    )
 
 
 def _write_plan_export(placed: list[Site], m_per_px: float) -> list[str]:

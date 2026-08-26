@@ -20,6 +20,66 @@ Built by [James Kidd](https://jameskidd.ca) — B.Sc. Mathematics & Computer Sci
 
 ---
 
+## Toolkit architecture
+
+The modules are layered so that applications are swappable and the bottom layer can be replaced with real geodata without touching anything above it.
+
+```
+geo.py          pixel ↔ world      the seam where real georeferencing attaches
+segmenters.py   image → regions    interchangeable backends + composable stages
+topology.py     regions → graph    planar invariants, colouring, Steiner benchmark
+optimize.py     graph → decisions  LP relaxation, duality certificates
+land_use.py     ─┐
+siting.py        ├─ applications, none of which the layers below know about
+pipeline.py     ─┘
+```
+
+### SLIC vs Felzenszwalb vs RAG — they are not three of the same thing
+
+This was a category error in the original code, with a visible consequence.
+
+**SLIC, Felzenszwalb and watershed are *segmenters*.** They turn an image into regions and are alternatives to one another.
+
+**RAG merging is a *post-process*.** It takes regions and returns fewer regions. It composes with *any* backend.
+
+The old `segment_image` bundled RAG merging into the SLIC branch only, so the "RAG Merge Threshold" slider silently did nothing when Felzenszwalb was selected — a control that lies. The pipeline is now an explicit sequence, every stage optional and independent:
+
+```
+backend → merge → drop small → fill gaps → relabel
+```
+
+With the fix, Felzenszwalb responds to the merge threshold as it always should have: **228 regions unmerged → 8 regions at threshold 14.**
+
+### Which backend, and why
+
+Each encodes a different assumption about what a region *is*:
+
+| Backend | Assumes a region is… | Best for | Weakness |
+|---|---|---|---|
+| **SLIC** | compact and similarly sized | paint-by-number — uniformity *is* the goal | compactness actively fights thin/elongated features |
+| **Felzenszwalb** | whatever shape the real boundaries make | land parcels, natural boundaries | cannot target an exact region count |
+| **Watershed** | a catchment basin of the gradient | strongest boundary adherence; when seeds are known | needs good markers |
+| **Precomputed** | already known — supplied externally | **real cadastral parcels** | requires that layer to exist |
+
+Siting now defaults to Felzenszwalb rather than SLIC. Uniform region size is a virtue for a paintable template and a liability for a parcel map.
+
+### The `precomputed` backend is the point
+
+Once a real parcel layer is attached, **the correct move is to stop segmenting.** A municipal cadastre *is* the segmentation, and it is authoritative in a way no image-derived guess can be. Everything downstream consumes a label array and does not care where it came from, so this is a backend swap, not a rewrite.
+
+### `geo.py` — where the world attaches
+
+Every hectare and dollar derives from a pixel count times an assumed ground resolution. That conversion was previously scattered inline across modules, each free to get it wrong independently — and one did. Centralising it makes it testable once and creates a single attachment point:
+
+| Source | Constructor | Result |
+|---|---|---|
+| Uploaded image | `GeoContext.from_scale(m_per_px, resize_scale)` | not georeferenced; coordinates are pixels, and exports say so |
+| GeoTIFF / imagery service | `GeoContext.from_affine(transform, crs)` | real world coordinates, everything downstream unchanged |
+
+The resize factor is a constructor argument precisely because forgetting it silently rescaled every cost — a bug this repo already had once. A geographic CRS (degrees) is rejected rather than mis-measured as metres.
+
+---
+
 ## Pipeline
 
 ### 1. Preprocessing
@@ -228,6 +288,30 @@ Connecting a set of chosen sites to an existing network at minimum total cost is
 The MST is a *yardstick, not a target* — it connects the same terminals as cheaply as geometry allows while ignoring whether those parcels are worth building on. Pricing that tradeoff is the point. On the fragmented scene the premium is zero: the score-driven choice happened to coincide with the cheapest structure.
 
 *Caveat on comparability: the MST runs on the original cost surface, where reaching another terminal costs the full path to it, while the plan discounts travel along corridors it has already built. Close but not identical models of corridor reuse — read the premium as scale, not an exact figure.*
+
+### 5. Linear programming as a certificate, not an optimiser
+
+The siting plan picks greedily. Greedy is fast and explainable and *unbounded in how bad it might be* — nothing in the plan says whether it found something near-optimal or left half the value behind. LP answers that.
+
+**Primal.** Choosing parcels to maximise suitability under a budget is a 0-1 knapsack — NP-hard. Relax `xᵢ ∈ {0,1}` to `0 ≤ xᵢ ≤ 1` and it becomes an LP, solvable exactly. Since every integral solution is also a feasible fractional one, the LP optimum **upper-bounds** the integer optimum. So `greedy / LP` is a *proof*, not an estimate:
+
+> LP bound **17.41** · greedy achieved **16.36** · **certified ≥ 93.9% optimal**
+
+**Dual.** The budget constraint carries one dual variable λ, which by strong duality is the exact **shadow price of the budget** — marginal suitability per additional dollar at the optimum. It answers "should I raise the budget?" without re-solving anything.
+
+**Complementary slackness** makes it diagnostic. Parcel *i* belongs in the plan only if its reduced cost `vᵢ − λcᵢ ≥ 0`, so λ is precisely the value-per-dollar threshold. On the test scene this pinpointed greedy's specific mistake:
+
+| Parcel | Reduced cost | LP | In greedy's plan |
+|---|---:|---:|:--:|
+| 9 | **+0.647** | 1.00 | — ← should have been |
+| 5 | +0.000 | 0.42 | — ← the critical ratio |
+| 3 | **−0.409** | 0.00 | ✅ ← should not have been |
+
+Parcel 5 sitting at reduced cost exactly zero with the only fractional value is the textbook knapsack-LP structure — a basic optimum has **at most one** fractional variable. That was property-tested over 400 random instances: LP bound never violated, shadow price never negative, and **zero instances with more than one fractional variable**, matching theory exactly.
+
+Testing also caught a real bug: the certificate did not check that the heuristic's own selection was *budget-feasible*, so an over-budget set could be reported as "≥140% optimal". Certifying a solution that violates the constraint is meaningless; it now refuses to claim a ratio.
+
+**Scope.** This certifies **selection** under independent costs. It does not certify **routing** — shared corridors couple the costs and break the knapsack structure. Routing has its own benchmark (the MST above). Two guarantees over two separable decisions is the honest division; one number pretending to cover both would not be.
 
 ### Multi-dimensionality, stated precisely
 
