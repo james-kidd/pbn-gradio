@@ -180,6 +180,72 @@ This was not cosmetic. It moved total connection cost from $37,457 to $21,284 an
 
 ---
 
+## Discrete structure — planarity, colouring, Steiner trees
+
+A segmentation into connected regions is a **planar subdivision**, so its region adjacency graph is the dual of that subdivision and is therefore **planar**. That is a strong structural constraint, and it buys three concrete things.
+
+### 1. Invariants that catch bugs
+
+A simple planar graph on *V* ≥ 3 vertices satisfies **E ≤ 3V − 6**, and its mean degree is strictly below 6. These are *necessary* conditions, so a violation is proof that something upstream is broken. The graph is planar by construction **if** the segmentation is well-formed — so the check is not asking "is this planar?" but "is the segmentation well-formed?", which is the question worth asking.
+
+Measured on real segmentations, with Euler's formula V − E + F = 2 giving the face count:
+
+| Scene | V | E | 3V − 6 | Mean degree | Disconnected regions |
+|---|---:|---:|---:|---:|---:|
+| Simple | 22 | 41 | 60 | 3.73 | 0 |
+| Fragmented | 80 | 176 | 234 | 4.40 | 0 |
+
+An invariant that can never fail is decoration, so it was tested against deliberately broken input:
+
+| Input | Result |
+|---|---|
+| Well-formed 3×3 grid | passes |
+| One label split into two non-touching blobs | **caught** — `well_formed=False` |
+| K₅, the canonical non-planar graph | **caught** — E=10 > 3V−6=9 |
+
+The disconnected-label case is the one that matters in practice: if a single label covers two separate blobs, the graph stops being the dual of a planar subdivision, and every adjacency-derived feature quietly means something other than what it claims. This is exactly the failure mode the `fill_unlabelled` fix could have introduced — and the invariant confirms it did not.
+
+### 2. A complexity guarantee, not an observation
+
+E ≤ 3V − 6 means the adjacency graph has **O(V) edges, not O(V²)**. Every graph algorithm downstream — adjacency scanning, colouring, routing over parcels — is therefore linear in the number of regions. That is a guarantee that follows from planarity, not a lucky property of these particular images.
+
+### 3. Bounded scheduling via the Four Colour Theorem
+
+Adjacent parcels cannot be worked simultaneously — one crew's access and spoil occupy both. That constraint is exactly graph colouring, and since the graph is planar, the **Four Colour Theorem** guarantees any site plan executes in **at most four parallel rounds, regardless of how many parcels there are.**
+
+Constructive four-colouring is famously involved, so the implementation colours greedily in degeneracy order and *verifies* the result rather than assuming it. Planar graphs are 5-degenerate, bounding greedy at six colours; measured degeneracy on both test scenes is 3, so greedy finds 3 rounds.
+
+### 4. Naming what the siting loop approximates
+
+Connecting a set of chosen sites to an existing network at minimum total cost is the **Steiner tree problem** in a metric space — NP-hard. The incremental siting loop is a greedy heuristic for it, and the standard 2-approximation (a minimum spanning tree over the **metric closure** of the terminals, using true pairwise least-cost path distances) makes a useful yardstick:
+
+| | Simple scene | Fragmented scene |
+|---|---:|---:|
+| MST over metric closure | $43,694 | $22,185 |
+| This plan's connection cost | $47,394 | $22,185 |
+| Premium for desirability over cheapness | $3,700 (+8%) | $0 |
+
+The MST is a *yardstick, not a target* — it connects the same terminals as cheaply as geometry allows while ignoring whether those parcels are worth building on. Pricing that tradeoff is the point. On the fragmented scene the premium is zero: the score-driven choice happened to coincide with the cheapest structure.
+
+*Caveat on comparability: the MST runs on the original cost surface, where reaching another terminal costs the full path to it, while the plan discounts travel along corridors it has already built. Close but not identical models of corridor reuse — read the premium as scale, not an exact figure.*
+
+### Multi-dimensionality, stated precisely
+
+The pipeline already operates in several distinct spaces, and it is worth separating them:
+
+| Space | Dimensions | Where |
+|---|---|---|
+| SLIC clustering | 5-D — (L, a, b, x, y) | Segmentation; compactness sets the colour/space trade |
+| Palette quantization | 3-D — CIELAB | Perceptually uniform, unlike RGB |
+| Region descriptors | 16-D across 4 families | Labelling, cost, and the ML export |
+| Adjacency | **0-D geometrically, but a graph** | The discrete layer above all of them |
+
+The last row is the substantive one. Colour, texture and shape are all *continuous* measurements on a region. Adjacency is not a measurement at all — it is combinatorial structure, and it is the only layer where planarity, colouring and connectivity live. That is why it supports guarantees the others cannot: no amount of spectral precision tells you a plan needs at most four work rounds.
+
+**Not yet built:** the honest extension to a genuine extra dimension is time. Repeat passes over the same ground make segmentation 3-D in (x, y, t), where regions become tubes and a parcel's *trajectory* through feature space becomes the signal — the crop-progression idea, with the topological machinery already in place to keep region identity consistent across frames.
+
+---
+
 ## Critical assessment — where the abstraction actually holds
 
 Being honest about the three applications, because they are not equally strong.

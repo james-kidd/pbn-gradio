@@ -348,6 +348,8 @@ def _siting_tab() -> None:
             )
             export_output = gr.File(label=None, file_count="multiple")
 
+            topology_output = gr.Markdown()
+
             gr.Markdown(SITING_CAVEATS)
 
     run_btn.click(
@@ -359,7 +361,7 @@ def _siting_tab() -> None:
         ],
         outputs=[
             connection_output, plan_output, report_output,
-            plan_table, export_output,
+            plan_table, export_output, topology_output,
         ],
     )
 

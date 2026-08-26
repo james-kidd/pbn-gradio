@@ -53,6 +53,17 @@ from land_use import (
     fill_unlabelled,
 )
 from pipeline import load_and_resize, preprocess_rgb, segment_image
+from topology import (
+    build_region_graph,
+    check_planarity,
+    colour_graph,
+    degeneracy_ordering,
+    format_topology_report,
+    region_holes,
+    steiner_benchmark,
+    verify_colouring,
+    work_schedule,
+)
 
 
 # ── Traversal cost surface ────────────────────────────────────
@@ -94,6 +105,8 @@ class Site:
     score: float = 0.0
     drivers: list[tuple[str, float]] = field(default_factory=list)
     build_order: int = 0
+    work_round: int = 0          # colour class: parcels sharing one can run in parallel
+    holes: int = 0               # interior voids that cannot be built on
 
 
 def build_cost_surface(
@@ -371,8 +384,9 @@ def render_plan(
 # ── Reporting ─────────────────────────────────────────────────
 
 PLAN_TABLE_HEADERS = [
-    "Build", "Parcel", "Class", "Area (ha)", "Corridor (m)",
-    "Connect cost", "If built first", "Saved by sequencing", "Top reason",
+    "Build", "Parcel", "Class", "Area (ha)", "Holes", "Work round",
+    "Corridor (m)", "Connect cost", "If built first", "Saved by sequencing",
+    "Top reason",
 ]
 
 
@@ -386,6 +400,8 @@ def build_plan_table(placed: list[Site]) -> list[list]:
             s.label,
             LAND_CLASSES[CLASS_INDEX[s.class_key]].name,
             f"{s.area_ha:.2f}",
+            s.holes or "—",
+            s.work_round or "—",
             f"{s.route_length_m:,.0f}",
             f"${s.connection_cost:,.0f}",
             f"${s.baseline_cost:,.0f}",
@@ -529,6 +545,28 @@ def run_siting(
         float(target_area_ha), float(connection_budget), float(corridor_cost),
     )
 
+    # ── Discrete structure ────────────────────────────────────
+    # The adjacency graph is the dual of a planar subdivision, so it must
+    # satisfy the planar invariants. Checking them here is a regression test on
+    # the segmentation, not a formality: a violation means an adjacency-derived
+    # number elsewhere in this module means something other than it claims.
+    region_graph = build_region_graph(labels)
+    planarity = check_planarity(region_graph, labels)
+    _, degeneracy = degeneracy_ordering(region_graph)
+    colouring = colour_graph(region_graph)
+    colouring_valid = verify_colouring(region_graph, colouring)
+
+    holes = region_holes(labels)
+    schedule, n_rounds = work_schedule(region_graph, [s.label for s in placed])
+    for s in placed:
+        s.work_round = schedule.get(s.label, 0)
+        s.holes = holes.get(s.label, 0)
+
+    achieved = sum(s.connection_cost for s in placed)
+    steiner = steiner_benchmark(
+        cost_surface, network, [s.point for s in placed],
+    )
+
     mcp = graph.MCP_Geometric(cost_surface)
     cum, _ = mcp.find_costs(_seed_indices(network))
 
@@ -537,8 +575,12 @@ def run_siting(
     report = build_siting_report(placed, len(sites), network_note, m_per_px)
     table = build_plan_table(placed)
     export = _write_plan_export(placed, m_per_px)
+    topology_report = format_topology_report(
+        planarity, degeneracy, n_rounds, colouring_valid,
+        sum(1 for s in placed if s.holes), steiner, achieved,
+    )
 
-    return connection_map, plan_image, report, table, export
+    return connection_map, plan_image, report, table, export, topology_report
 
 
 def _write_plan_export(placed: list[Site], m_per_px: float) -> list[str]:
@@ -560,13 +602,15 @@ def _write_plan_export(placed: list[Site], m_per_px: float) -> list[str]:
     with open(csv_path, "w", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow([
-            "build_order", "parcel_id", "class", "area_ha", "corridor_m",
+            "build_order", "parcel_id", "class", "area_ha", "holes",
+            "work_round", "corridor_m",
             "connection_cost", "cost_if_built_first", "saved_by_sequencing",
             "site_row_px", "site_col_px",
         ])
         for s in placed:
             writer.writerow([
                 s.build_order, s.label, s.class_key, round(s.area_ha, 4),
+                s.holes, s.work_round,
                 round(s.route_length_m, 1), round(s.connection_cost, 2),
                 round(s.baseline_cost, 2),
                 round(s.baseline_cost - s.connection_cost, 2),
