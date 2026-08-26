@@ -25,6 +25,7 @@ what that costs us in accuracy.
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass, field
 
 import cv2
@@ -141,14 +142,17 @@ class RegionFeatures:
     elongation: float        # major axis / minor axis
     solidity: float          # area / convex hull area
 
-    # Context (filled in after all regions are classified)
+    # Context — topology is class-independent, so it is available *before*
+    # labelling and may inform it. The class fractions below necessarily come
+    # after, since they describe what the neighbours turned out to be.
+    neighbour_count: int = 0
     obstructed_frac: float = 0.0
     road_frac: float = 0.0
 
     # Results
     class_key: str = "unclear"
     confidence: float = 0.0
-    evidence: list[tuple[str, float]] = field(default_factory=list)
+    evidence: list[tuple[str, str, float]] = field(default_factory=list)
 
 
 def _grouped_stats(labels: np.ndarray, values: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
@@ -239,18 +243,33 @@ def extract_features(
 
 # ── 2. Labelling ──────────────────────────────────────────────
 
-def score_region(f: RegionFeatures) -> dict[str, list[tuple[str, float]]]:
+# Every piece of evidence is tagged with the family of features it draws on.
+# This is what makes the contribution of shape and context *measurable* rather
+# than asserted: switch a family off, re-run, and read the difference.
+FEATURE_FAMILIES: tuple[str, ...] = ("colour", "texture", "shape", "context")
+ALL_FAMILIES = frozenset(FEATURE_FAMILIES)
+
+
+def score_region(
+    f: RegionFeatures,
+    families: frozenset[str] = ALL_FAMILIES,
+) -> dict[str, list[tuple[str, str, float]]]:
     """Score each land class against a region, keeping the evidence itemised.
 
-    Each entry is a (human-readable reason, weight) pair. The class score is the
-    sum of its weights; keeping them separate is what lets the UI explain *why*
-    a parcel was labelled the way it was rather than just asserting it.
-    """
-    scores: dict[str, list[tuple[str, float]]] = {c.key: [] for c in LAND_CLASSES}
+    Each entry is a (family, human-readable reason, weight) triple. The class
+    score is the sum of its weights; keeping them separate is what lets the UI
+    explain *why* a parcel was labelled the way it was rather than asserting it,
+    and what lets a downstream model consume the reasoning rather than just the
+    verdict.
 
-    def add(key: str, reason: str, value: float) -> None:
-        if abs(value) > 1e-3:
-            scores[key].append((reason, value))
+    `families` restricts which feature families may contribute — the mechanism
+    behind the ablation below.
+    """
+    scores: dict[str, list[tuple[str, str, float]]] = {c.key: [] for c in LAND_CLASSES}
+
+    def add(key: str, family: str, reason: str, value: float) -> None:
+        if family in families and abs(value) > 1e-3:
+            scores[key].append((family, reason, value))
 
     green_hue = _band(f.hue_deg, 68, 88, 165, 190)
     yellow_hue = _band(f.hue_deg, 30, 42, 68, 85)
@@ -262,67 +281,75 @@ def score_region(f: RegionFeatures) -> dict[str, list[tuple[str, float]]]:
     uniform = 1.0 - _ramp(f.l_std, 3, 16)
 
     # Dense vegetation: strongly green, saturated, textured canopy.
-    add("dense_veg", "strong excess-green response", 2.4 * _ramp(f.exg, 0.03, 0.16))
-    add("dense_veg", "green hue", 1.0 * green_hue)
-    add("dense_veg", "saturated colour", 0.6 * _ramp(f.saturation, 0.18, 0.45))
-    add("dense_veg", "canopy texture", 0.5 * _ramp(f.edge_density, 0.08, 0.25))
+    add("dense_veg", "colour", "strong excess-green response", 2.4 * _ramp(f.exg, 0.03, 0.16))
+    add("dense_veg", "colour", "green hue", 1.0 * green_hue)
+    add("dense_veg", "colour", "saturated colour", 0.6 * _ramp(f.saturation, 0.18, 0.45))
+    add("dense_veg", "texture", "canopy texture", 0.5 * _ramp(f.edge_density, 0.08, 0.25))
     # Excess-green cannot tell healthy green from senescent yellow — both are
     # green-dominant in RGB. Hue can, so it has to carry the discrimination.
-    add("dense_veg", "counts against: yellow cast", -2.0 * yellow_hue)
+    add("dense_veg", "colour", "counts against: yellow cast", -2.0 * yellow_hue)
 
     # Sparse vegetation: green but weakly, usually with soil showing through.
-    add("sparse_veg", "weak excess-green response", 2.0 * _band(f.exg, -0.02, 0.01, 0.06, 0.13))
-    add("sparse_veg", "green hue", 0.7 * green_hue)
-    add("sparse_veg", "mixed cover (high internal variation)", 0.6 * _ramp(f.l_std, 5, 18))
+    add("sparse_veg", "colour", "weak excess-green response", 2.0 * _band(f.exg, -0.02, 0.01, 0.06, 0.13))
+    add("sparse_veg", "colour", "green hue", 0.7 * green_hue)
+    add("sparse_veg", "texture", "mixed cover (high internal variation)", 0.6 * _ramp(f.l_std, 5, 18))
 
     # Stressed / senescent: yellowing, warm, still some chlorophyll signal.
-    add("stressed_veg", "yellow hue", 1.8 * yellow_hue)
-    add("stressed_veg", "warm (high LAB b*)", 1.0 * _ramp(f.lab_b, 12, 34))
-    add("stressed_veg", "chlorophyll fading but present", 0.8 * _ramp(f.exg, -0.06, 0.04))
-    add("stressed_veg", "bright", 0.4 * _ramp(f.lab_l, 45, 78))
+    add("stressed_veg", "colour", "yellow hue", 1.8 * yellow_hue)
+    add("stressed_veg", "colour", "warm (high LAB b*)", 1.0 * _ramp(f.lab_b, 12, 34))
+    add("stressed_veg", "colour", "chlorophyll fading but present", 0.8 * _ramp(f.exg, -0.06, 0.04))
+    add("stressed_veg", "colour", "bright", 0.4 * _ramp(f.lab_l, 45, 78))
 
     # Bare soil: warm, red-brown, low green, comparatively smooth.
-    add("bare_soil", "brown/red hue", 1.6 * brown_hue)
-    add("bare_soil", "warm and red (positive a* and b*)", 1.0 * min(_ramp(f.lab_a, 2, 16), warm))
-    add("bare_soil", "no vegetation signal", 1.2 * _ramp(-f.exg, 0.0, 0.08))
-    add("bare_soil", "smooth surface", 0.5 * smooth)
+    add("bare_soil", "colour", "brown/red hue", 1.6 * brown_hue)
+    add("bare_soil", "colour", "warm and red (positive a* and b*)", 1.0 * min(_ramp(f.lab_a, 2, 16), warm))
+    add("bare_soil", "colour", "no vegetation signal", 1.2 * _ramp(-f.exg, 0.0, 0.08))
+    add("bare_soil", "texture", "smooth surface", 0.5 * smooth)
 
     # Water: dark, flat, unsaturated or blue. Flatness is the strongest cue —
     # but flatness alone also describes a ploughed field, so it needs a colour
     # precondition. Warm chroma rules water out however smooth the surface is.
     warm_chroma = min(_ramp(f.lab_b, 6, 24), _ramp(f.saturation, 0.15, 0.40))
-    add("water", "very low internal variation", 1.6 * uniform)
-    add("water", "dark", 1.0 * _ramp(-f.lab_l, -42, -18))
-    add("water", "blue hue", 1.0 * blue_hue)
-    add("water", "smooth surface", 0.8 * smooth)
-    add("water", "no vegetation signal", 0.6 * _ramp(-f.exg, 0.0, 0.05))
-    add("water", "counts against: warm colour cast", -2.2 * warm_chroma)
+    add("water", "texture", "very low internal variation", 1.6 * uniform)
+    add("water", "colour", "dark", 1.0 * _ramp(-f.lab_l, -42, -18))
+    add("water", "colour", "blue hue", 1.0 * blue_hue)
+    add("water", "texture", "smooth surface", 0.8 * smooth)
+    add("water", "colour", "no vegetation signal", 0.6 * _ramp(-f.exg, 0.0, 0.05))
+    add("water", "colour", "counts against: warm colour cast", -2.2 * warm_chroma)
 
     # Built structure: grey, bright, hard edges, compact and convex.
-    add("built", "desaturated (grey)", 1.4 * low_sat)
-    add("built", "hard edges", 1.2 * _ramp(f.edge_density, 0.12, 0.35))
-    add("built", "bright", 0.8 * _ramp(f.lab_l, 48, 85))
-    add("built", "compact, convex footprint", 0.8 * _ramp(f.solidity, 0.82, 0.97))
+    add("built", "colour", "desaturated (grey)", 1.4 * low_sat)
+    add("built", "texture", "hard edges", 1.2 * _ramp(f.edge_density, 0.12, 0.35))
+    add("built", "colour", "bright", 0.8 * _ramp(f.lab_l, 48, 85))
+    add("built", "shape", "compact, convex footprint", 0.8 * _ramp(f.solidity, 0.82, 0.97))
 
     # Road / track: the class that colour alone cannot separate from "built".
     # Elongation is what distinguishes it, which is exactly the point.
-    add("road", "elongated, ribbon-like shape", 2.0 * _ramp(f.elongation, 2.6, 7.0))
-    add("road", "desaturated (grey)", 1.0 * low_sat)
-    add("road", "mid lightness", 0.6 * _band(f.lab_l, 22, 34, 68, 84))
-    add("road", "smooth surface", 0.4 * smooth)
+    add("road", "shape", "elongated, ribbon-like shape", 2.0 * _ramp(f.elongation, 2.6, 7.0))
+    add("road", "colour", "desaturated (grey)", 1.0 * low_sat)
+    add("road", "colour", "mid lightness", 0.6 * _band(f.lab_l, 22, 34, 68, 84))
+    add("road", "texture", "smooth surface", 0.4 * smooth)
+    # A track is a corridor: it runs between things rather than sitting inside
+    # one thing. High contact with many distinct neighbours is corroboration
+    # that colour and shape cannot supply on their own.
+    add("road", "context", "borders many distinct parcels (corridor)",
+        0.8 * _ramp(f.neighbour_count, 3.0, 9.0))
 
     # Unclear: deep shadow, where no other class can be trusted.
-    add("unclear", "deep shadow", 2.0 * _ramp(-f.lab_l, -26, -8))
-    add("unclear", "no usable colour information", 0.8 * low_sat * _ramp(-f.lab_l, -34, -14))
+    add("unclear", "colour", "deep shadow", 2.0 * _ramp(-f.lab_l, -26, -8))
+    add("unclear", "colour", "no usable colour information", 0.8 * low_sat * _ramp(-f.lab_l, -34, -14))
 
     return scores
 
 
-def classify_regions(features: list[RegionFeatures]) -> None:
+def classify_regions(
+    features: list[RegionFeatures],
+    families: frozenset[str] = ALL_FAMILIES,
+) -> None:
     """Assign a class and a confidence to every region, in place."""
     for f in features:
-        scores = score_region(f)
-        totals = {key: sum(v for _, v in items) for key, items in scores.items()}
+        scores = score_region(f, families)
+        totals = {key: sum(v for _, _, v in items) for key, items in scores.items()}
         ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
         best_key, best_score = ranked[0]
         runner_up = ranked[1][1] if len(ranked) > 1 else 0.0
@@ -336,13 +363,49 @@ def classify_regions(features: list[RegionFeatures]) -> None:
 
         if best_score < 0.5:
             f.class_key = "unclear"
-            f.evidence = [("no class scored above the evidence floor", best_score)]
+            f.evidence = [("colour", "no class scored above the evidence floor", best_score)]
         else:
             f.class_key = best_key
-            f.evidence = sorted(scores[best_key], key=lambda kv: kv[1], reverse=True)[:4]
+            f.evidence = sorted(scores[best_key], key=lambda e: e[2], reverse=True)[:4]
 
 
 # ── Adjacency: what each parcel borders ───────────────────────
+
+def _boundary_pairs(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Every 4-connected pair of touching region labels, both directions."""
+    a_parts, b_parts = [], []
+    for axis in (0, 1):
+        a = labels.take(np.arange(labels.shape[axis] - 1), axis=axis)
+        b = labels.take(np.arange(1, labels.shape[axis]), axis=axis)
+        differs = a != b
+        a_parts.append(a[differs])
+        b_parts.append(b[differs])
+    left = np.concatenate(a_parts)
+    right = np.concatenate(b_parts)
+    return np.concatenate([left, right]), np.concatenate([right, left])
+
+
+def compute_topology(labels: np.ndarray, features: list[RegionFeatures]) -> None:
+    """Count how many distinct regions each region touches.
+
+    This is pure graph structure — it says nothing about what the neighbours
+    *are*, so unlike the class fractions below it is available before labelling
+    and is allowed to inform it. A corridor touches many parcels; a field
+    interior touches few. Colour cannot see that distinction at all.
+    """
+    src, dst = _boundary_pairs(labels)
+    n = int(labels.max()) + 1
+    seen = np.zeros(n, dtype=np.int64)
+    order = np.lexsort((dst, src))
+    src_s, dst_s = src[order], dst[order]
+    if src_s.size:
+        new_pair = np.ones(src_s.size, dtype=bool)
+        new_pair[1:] = (src_s[1:] != src_s[:-1]) | (dst_s[1:] != dst_s[:-1])
+        np.add.at(seen, src_s[new_pair], 1)
+
+    for f in features:
+        f.neighbour_count = int(seen[f.label])
+
 
 def compute_adjacency(
     labels: np.ndarray,
@@ -355,21 +418,15 @@ def compute_adjacency(
     opposite. Neither is visible in the region's own colour — it only exists in
     the relationship between regions.
     """
-    by_label = {f.label: f for f in features}
     n = int(labels.max()) + 1
 
     class_of = np.full(n, CLASS_INDEX["unclear"], dtype=np.int32)
     for f in features:
         class_of[f.label] = CLASS_INDEX[f.class_key]
 
+    src, dst = _boundary_pairs(labels)
     contacts = np.zeros((n, N_CLASSES), dtype=np.float64)
-    for axis in (0, 1):
-        a = labels.take(np.arange(labels.shape[axis] - 1), axis=axis)
-        b = labels.take(np.arange(1, labels.shape[axis]), axis=axis)
-        differs = a != b
-        a_flat, b_flat = a[differs], b[differs]
-        np.add.at(contacts, (a_flat, class_of[b_flat]), 1.0)
-        np.add.at(contacts, (b_flat, class_of[a_flat]), 1.0)
+    np.add.at(contacts, (src, class_of[dst]), 1.0)
 
     obstructing_cols = [CLASS_INDEX[k] for k in OBSTRUCTING]
     road_col = CLASS_INDEX["road"]
@@ -380,7 +437,6 @@ def compute_adjacency(
             continue
         f.obstructed_frac = float(contacts[f.label, obstructing_cols].sum() / total)
         f.road_frac = float(contacts[f.label, road_col] / total)
-        by_label[f.label] = f
 
 
 # ── 3. Cost estimation ────────────────────────────────────────
@@ -403,48 +459,50 @@ class RegionCost:
     base_cost: float
     multiplier: float
     total_cost: float
-    drivers: list[tuple[str, float]]
+    drivers: list[tuple[str, str, float]]
 
 
-def workability_multiplier(f: RegionFeatures, area_ha: float) -> tuple[float, list[tuple[str, float]]]:
+def workability_multiplier(
+    f: RegionFeatures,
+    area_ha: float,
+    families: frozenset[str] = ALL_FAMILIES,
+) -> tuple[float, list[tuple[str, str, float]]]:
     """How much more than the base rate this parcel costs, and why.
 
-    Returns the multiplier and the itemised surcharges that produced it. This is
-    the part of the estimate that has nothing to do with what the parcel is made
-    of and everything to do with how awkward it is to actually work.
+    Returns the multiplier and the itemised surcharges that produced it, each
+    tagged with the feature family it came from. This is the part of the
+    estimate that has nothing to do with what the parcel is made of and
+    everything to do with how awkward it is to actually work — which is to say,
+    it is almost entirely shape and context.
     """
-    drivers: list[tuple[str, float]] = []
+    drivers: list[tuple[str, str, float]] = []
+
+    def add(family: str, reason: str, value: float) -> None:
+        if family in families and abs(value) > 0.01:
+            drivers.append((family, reason, value))
 
     # Small parcels lose to fixed costs: mobilising equipment to a tenth of a
     # hectare costs nearly what mobilising to a full one does.
     fragmentation = 1.0 - _ramp(area_ha, 0.05, 1.20)
-    surcharge = FRAGMENTATION_WEIGHT * fragmentation
-    if surcharge > 0.01:
-        drivers.append(("small parcel (fixed costs spread thin)", surcharge))
+    add("shape", "small parcel (fixed costs spread thin)",
+        FRAGMENTATION_WEIGHT * fragmentation)
 
     # Ragged boundaries mean more edge work per unit of area cleared.
     raggedness = _ramp(f.shape_index, 1.15, 2.60)
-    surcharge = SHAPE_WEIGHT * raggedness
-    if surcharge > 0.01:
-        drivers.append(("irregular boundary (more edge work)", surcharge))
+    add("shape", "irregular boundary (more edge work)", SHAPE_WEIGHT * raggedness)
 
     # Internally inconsistent parcels cannot be worked with one method.
     mixed = _ramp(f.l_std, 4.0, 18.0)
-    surcharge = HETEROGENEITY_WEIGHT * mixed
-    if surcharge > 0.01:
-        drivers.append(("inconsistent surface (mixed method)", surcharge))
+    add("texture", "inconsistent surface (mixed method)", HETEROGENEITY_WEIGHT * mixed)
 
     # Hemmed in by water or structures: no approach from those sides.
-    surcharge = ACCESS_WEIGHT * f.obstructed_frac
-    if surcharge > 0.01:
-        drivers.append(("restricted access (water/structure border)", surcharge))
+    add("context", "restricted access (water/structure border)",
+        ACCESS_WEIGHT * f.obstructed_frac)
 
     # Fronting an existing road is worth real money.
-    credit = ROAD_CREDIT * f.road_frac
-    if credit > 0.01:
-        drivers.append(("road frontage (existing access)", -credit))
+    add("context", "road frontage (existing access)", -ROAD_CREDIT * f.road_frac)
 
-    multiplier = 1.0 + sum(v for _, v in drivers)
+    multiplier = 1.0 + sum(v for _, _, v in drivers)
     return float(np.clip(multiplier, 1.0, MULTIPLIER_CAP)), drivers
 
 
@@ -452,13 +510,14 @@ def estimate_costs(
     features: list[RegionFeatures],
     m_per_px: float,
     rates: dict[str, float],
+    families: frozenset[str] = ALL_FAMILIES,
 ) -> list[RegionCost]:
     """Price every region: area x class base rate x workability multiplier."""
     ha_per_px = (m_per_px ** 2) / 10_000.0
     costs: list[RegionCost] = []
     for f in features:
         area_ha = f.area_px * ha_per_px
-        multiplier, drivers = workability_multiplier(f, area_ha)
+        multiplier, drivers = workability_multiplier(f, area_ha, families)
         base_rate = rates.get(f.class_key, 0.0)
         base_cost = area_ha * base_rate
         costs.append(RegionCost(
@@ -640,9 +699,12 @@ def build_region_table(
     rows = []
     for f, c in paired[:limit]:
         cls = LAND_CLASSES[CLASS_INDEX[f.class_key]]
-        why = "; ".join(reason for reason, _ in f.evidence[:2]) or "—"
+        why = "; ".join(
+            f"{reason} [{family}]" for family, reason, _ in f.evidence[:2]
+        ) or "—"
         drivers = "; ".join(
-            f"{reason} ({'+' if v > 0 else ''}{v:.0%})" for reason, v in c.drivers[:2]
+            f"{reason} ({'+' if v > 0 else ''}{v:.0%}) [{family}]"
+            for family, reason, v in c.drivers[:2]
         ) or "none — clean parcel"
         rows.append([
             f.label,
@@ -661,6 +723,221 @@ REGION_TABLE_HEADERS = [
     "Region", "Label", "Confidence", "Area (ha)",
     "Workability", "Cost", "Why this label", "Cost drivers",
 ]
+
+
+# ── Feature export for downstream models ──────────────────────
+
+# The families each exported column belongs to. A model consuming this table
+# knows not just the value but what kind of evidence it is, which is what lets
+# an attribution over these columns be read as an explanation rather than a
+# ranking of opaque indices.
+FEATURE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("area_px",        "shape",   "region size in pixels"),
+    ("area_ha",        "shape",   "region size on the ground"),
+    ("lab_l",          "colour",  "CIELAB lightness"),
+    ("lab_a",          "colour",  "CIELAB green-red axis"),
+    ("lab_b",          "colour",  "CIELAB blue-yellow axis"),
+    ("hue_deg",        "colour",  "circular-mean hue"),
+    ("saturation",     "colour",  "HSV saturation"),
+    ("exg",            "colour",  "excess green (visible-band vegetation proxy)"),
+    ("l_std",          "texture", "internal lightness variation"),
+    ("edge_density",   "texture", "mean gradient magnitude"),
+    ("shape_index",    "shape",   "perimeter / (2*sqrt(pi*area)); 1.0 is a circle"),
+    ("elongation",     "shape",   "major axis / minor axis"),
+    ("solidity",       "shape",   "area / convex hull area"),
+    ("neighbour_count", "context", "number of distinct regions touched"),
+    ("obstructed_frac", "context", "share of border against water or structure"),
+    ("road_frac",      "context",  "share of border against road"),
+)
+
+
+def export_features(
+    features: list[RegionFeatures],
+    costs: list[RegionCost],
+) -> list[dict]:
+    """Per-region feature records for a downstream model to train on.
+
+    Segmentation is what makes this possible: a region is a unit big enough to
+    carry shape and context, which a pixel is not. A per-pixel model can only
+    ever see colour and a local neighbourhood; once pixels are grouped, "how big
+    is this thing, what shape is it, what does it border" become askable — and
+    those are the questions whose answers a human can check.
+    """
+    records = []
+    for f, c in zip(features, costs):
+        values = {name: getattr(f, name, None) for name, _, _ in FEATURE_COLUMNS}
+        values["area_ha"] = c.area_ha
+        records.append({
+            "region_id": f.label,
+            "centroid_x": round(f.centroid[0], 1),
+            "centroid_y": round(f.centroid[1], 1),
+            **{k: (round(v, 5) if isinstance(v, float) else v) for k, v in values.items()},
+            "predicted_class": f.class_key,
+            "confidence": round(f.confidence, 4),
+            "evidence": [
+                {"family": fam, "reason": reason, "weight": round(w, 4)}
+                for fam, reason, w in f.evidence
+            ],
+            "estimated_cost": round(c.total_cost, 2),
+            "workability_multiplier": round(c.multiplier, 4),
+            "cost_drivers": [
+                {"family": fam, "reason": reason, "delta": round(v, 4)}
+                for fam, reason, v in c.drivers
+            ],
+        })
+    return records
+
+
+def write_feature_export(records: list[dict], directory: str) -> tuple[str, str]:
+    """Write the feature table as CSV (flat) and JSON (with reasoning)."""
+    import csv
+    import json
+    import os
+
+    os.makedirs(directory, exist_ok=True)
+    csv_path = os.path.join(directory, "region_features.csv")
+    json_path = os.path.join(directory, "region_features.json")
+
+    flat_keys = [
+        "region_id", "centroid_x", "centroid_y",
+        *[name for name, _, _ in FEATURE_COLUMNS],
+        "predicted_class", "confidence",
+        "workability_multiplier", "estimated_cost",
+    ]
+    with open(csv_path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=flat_keys, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(records)
+
+    with open(json_path, "w") as fh:
+        json.dump({
+            "schema": [
+                {"column": name, "family": family, "description": desc}
+                for name, family, desc in FEATURE_COLUMNS
+            ],
+            "regions": records,
+        }, fh, indent=2)
+
+    return csv_path, json_path
+
+
+# ── Ablation: does shape and context actually add anything? ────
+
+ABLATIONS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("Colour only", frozenset({"colour"})),
+    ("+ texture", frozenset({"colour", "texture"})),
+    ("+ shape", frozenset({"colour", "texture", "shape"})),
+    ("+ context (full)", ALL_FAMILIES),
+)
+
+
+def run_ablation(
+    labels: np.ndarray,
+    features: list[RegionFeatures],
+    m_per_px: float,
+    rates: dict[str, float],
+) -> list[dict]:
+    """Re-run labelling and costing with feature families progressively enabled.
+
+    The claim "shape and context add information" is cheap to assert and easy to
+    test, so it should be tested. Each row re-runs the full pipeline with one
+    more family available and reports what changed. Note this measures
+    *information contribution*, not accuracy — without ground truth we can show
+    that the extra families change the answer substantially, not that they
+    change it correctly.
+    """
+    import copy
+
+    results = []
+    baseline_classes: dict[int, str] | None = None
+
+    for name, families in ABLATIONS:
+        trial = copy.deepcopy(features)
+        classify_regions(trial, families)
+        if "context" in families:
+            compute_adjacency(labels, trial)
+        costs = estimate_costs(trial, m_per_px, rates, families)
+
+        classes = {f.label: f.class_key for f in trial}
+        total_area = sum(c.area_ha for c in costs)
+        changed_area = 0.0
+        if baseline_classes is not None:
+            changed_area = sum(
+                c.area_ha for f, c in zip(trial, costs)
+                if baseline_classes.get(f.label) != f.class_key
+            )
+
+        results.append({
+            "stage": name,
+            "total_cost": sum(c.total_cost for c in costs),
+            "mean_confidence": float(np.mean([f.confidence for f in trial])),
+            "distinct_classes": len({f.class_key for f in trial}),
+            "changed_area_pct": 100.0 * changed_area / total_area if total_area else 0.0,
+        })
+        baseline_classes = classes
+
+    return results
+
+
+def format_ablation(results: list[dict]) -> str:
+    """Markdown table of the ablation, with the headline delta called out."""
+    if not results:
+        return ""
+    lines = [
+        "### Does shape and context actually add anything?",
+        "",
+        "Each row re-runs labelling and costing with one more feature family "
+        "available. *Area relabelled* is the share of ground that changed class "
+        "when that family was switched on.",
+        "",
+        "| Features available | Total cost | Mean confidence | Classes found | Area relabelled |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for i, r in enumerate(results):
+        relabelled = "—" if i == 0 else f"{r['changed_area_pct']:.1f}%"
+        lines.append(
+            f"| {r['stage']} | ${r['total_cost']:,.0f} | {r['mean_confidence']:.0%} | "
+            f"{r['distinct_classes']} | {relabelled} |"
+        )
+
+    first, last = results[0], results[-1]
+    delta = last["total_cost"] - first["total_cost"]
+    pct = 100.0 * delta / first["total_cost"] if first["total_cost"] else 0.0
+
+    # Which family actually moved the number? Averaging "shape and context"
+    # into one claim would hide the case where one of them does nothing, and
+    # that case is worth knowing about — it tells you where to spend effort.
+    steps = [
+        (results[i]["stage"], results[i]["total_cost"] - results[i - 1]["total_cost"])
+        for i in range(1, len(results))
+    ]
+    biggest, biggest_delta = max(steps, key=lambda s: abs(s[1]))
+    smallest, smallest_delta = min(steps, key=lambda s: abs(s[1]))
+
+    lines += [
+        "",
+        f"Colour alone puts the estimate at **${first['total_cost']:,.0f}**; the full "
+        f"feature set puts it at **${last['total_cost']:,.0f}** — a **{pct:+.0f}%** "
+        "difference, on identical pixels and identical base rates.",
+        "",
+        f"The single largest contribution is **{biggest}** at "
+        f"${abs(biggest_delta):,.0f}. The smallest is **{smallest}** at "
+        f"${abs(smallest_delta):,.0f}"
+        + (
+            " — near-zero here, which is a fact about this scene rather than a "
+            "defect. Context earns its keep on fragmented ground with real water "
+            "and structure boundaries; a scene without much of that has little "
+            "for it to find."
+            if "context" in smallest and abs(smallest_delta) < 0.02 * first["total_cost"]
+            else "."
+        ),
+        "",
+        "This measures how much the extra families *change* the answer, not "
+        "whether they make it correct. Without ground truth the honest claim is "
+        "that these features carry decision-relevant information a colour-only "
+        "model structurally cannot access — not that this number is right.",
+    ]
+    return "\n".join(lines)
 
 
 # ── Rate table plumbing ───────────────────────────────────────
@@ -737,8 +1014,13 @@ def run_land_use(
     if not features:
         raise gr.Error("Segmentation produced no regions — try a larger working size.")
 
+    compute_topology(labels, features)
     classify_regions(features)
     compute_adjacency(labels, features)
+    # Neighbour classes are now known, so the context-dependent evidence can
+    # finally be scored. One refinement pass only: iterating to convergence
+    # would be a conditional random field, which is a different project.
+    classify_regions(features)
 
     rates = parse_rate_table(rate_table)
     costs = estimate_costs(features, effective_m_per_px, rates)
@@ -751,7 +1033,19 @@ def run_land_use(
     report = build_cost_report(features, costs, effective_m_per_px, rates, frame_area_ha)
     table = build_region_table(features, costs)
 
-    return label_map, confidence_map, legend, report, table
+    ablation = format_ablation(
+        run_ablation(labels, features, effective_m_per_px, rates)
+    )
+
+    export_dir = tempfile.mkdtemp(prefix="region_features_")
+    csv_path, json_path = write_feature_export(
+        export_features(features, costs), export_dir,
+    )
+
+    return (
+        label_map, confidence_map, legend, report, table,
+        ablation, [csv_path, json_path],
+    )
 
 
 # ── CAVEATS ───────────────────────────────────────────────────

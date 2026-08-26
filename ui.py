@@ -38,8 +38,16 @@ it doesn't tell you the parcel is a tenth of a hectare, ragged-edged, and
 walled in by water on three sides — which is what actually makes it expensive.
 That information is structural, and it was already sitting in the segmentation.
 
-Base rates are editable below. Every figure is traceable to a named feature,
-and the confidence map shows you where the labelling is guessing.
+The labeller isn't really the point — what SLIC makes *askable* is. A pixel has
+only colour and a neighbourhood. Group pixels into regions and you can ask how
+big a thing is, what shape it is, how many distinct things it borders. Those
+answers move the estimate, and a human can check them: *"a road because it's
+twelve times longer than wide and touches four parcels"* is verifiable by
+looking, in a way that *"channel 47 activated"* is not.
+
+So this exports a per-region feature table for downstream models, tagged by
+feature family, with the reasoning attached. The ablation below tests whether
+the extra families actually earn their place.
 """
 
 CAVEATS = """
@@ -197,6 +205,17 @@ def _land_use_tab() -> None:
                 label=None,
             )
 
+            ablation_output = gr.Markdown()
+
+            gr.Markdown(
+                "#### Feature export\n"
+                "Per-region features for a downstream model. The CSV is the flat "
+                "table; the JSON carries the same rows plus the scored evidence "
+                "and cost drivers behind each one, and a schema tagging every "
+                "column with its feature family."
+            )
+            export_output = gr.File(label=None, file_count="multiple")
+
             gr.Markdown(CAVEATS)
 
     run_btn.click(
@@ -207,7 +226,7 @@ def _land_use_tab() -> None:
         ],
         outputs=[
             label_output, confidence_output, legend_output,
-            report_output, region_table,
+            report_output, region_table, ablation_output, export_output,
         ],
     )
 

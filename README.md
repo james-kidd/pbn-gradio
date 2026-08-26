@@ -107,9 +107,48 @@ This is a method demonstration, not a validated model:
 
 The workability multiplier is the piece most likely to survive contact with real data, because it depends on geometry rather than spectra. A small ragged parcel hemmed in by water is expensive to work regardless of what is growing on it.
 
+### Segmentation as an interpretability layer
+
+The heuristic labeller is not really the point. The point is what SLIC makes *askable*.
+
+A per-pixel model sees colour and a local neighbourhood. That is all a pixel has. Once pixels are grouped into regions, an entirely different class of question becomes answerable — *how big is this thing, what shape is it, how many distinct things does it border, is it walled in* — and those questions have two properties the pixel-level ones lack:
+
+1. **They carry decision-relevant information.** The ablation below shows they move the cost estimate by 33–70% on identical pixels.
+2. **A human can check the answers.** "This is a road because it is twelve times longer than it is wide and touches four different parcels" is a claim you can verify by looking. "This is a road because channel 47 activated" is not.
+
+So the pipeline exports a **per-region feature table** rather than just a picture: a flat CSV for training, and a JSON carrying the same rows plus the scored evidence behind every label and every cost driver, with each column tagged by feature family. A downstream model consuming this gets features whose attributions are readable as explanations, because each input already means something in the world.
+
+This is what shape and context buy: not better numbers necessarily, but numbers whose reasoning survives being questioned.
+
+### Ablation — testing the claim
+
+"Shape and context add information" is cheap to assert, so the tool tests it. Each stage re-runs labelling and costing with one more feature family available:
+
+| Features available | Total cost | Mean confidence | Area relabelled |
+|---|---:|---:|---:|
+| Colour only | $44,170 | 76% | — |
+| + texture | $44,438 | 89% | 3.4% |
+| + shape | $69,442 | 93% | 0.4% |
+| + context (full) | $75,234 | 93% | 0.0% |
+
+*(fragmented synthetic test scene, 1200 superpixels; the simpler scene shows nearer +33%. Exact figures move with segmentation settings — the stable finding is the ordering, not the dollar amounts.)*
+
+Two honest readings of this:
+
+- **Shape dominates.** On both test scenes it is by far the largest single contributor. Fragmentation and boundary raggedness drive cost harder than anything colour reports.
+- **Context is scene-dependent.** It contributes thousands of dollars on the fragmented scene and a few hundred on the simple one, and it acts almost entirely through the cost channel (access and frontage) rather than through labelling. That is expected — there is nothing for it to find in a scene without much water or structure boundary — but it means context is not a general-purpose win, and claiming otherwise would be overselling it.
+
+The ablation measures how much the extra families *change* the answer, not whether they make it *correct*. Without ground truth that is the strongest claim available.
+
 ### Where this goes
 
-The natural extension is time series: vegetation follows predictable colour progressions as it matures, so tracking class distributions across repeat passes of the same field turns this from a snapshot into a maturity signal — the crop-progression idea this project was originally aiming at, with the labelling and area accounting now actually built.
+Two directions, one better supported than the other.
+
+**Supported.** Site suitability for infrastructure — data centres, solar, industrial siting — is largely a question of *shape and context*: is there a large contiguous parcel, is it regular enough to build on, does it have road frontage, is it hemmed in. Those are exactly the features this already computes, and the workability multiplier is close to a suitability score with the sign flipped. Time series is the other: vegetation follows predictable colour progressions as it matures, so tracking class distributions across repeat passes turns a snapshot into a maturity signal.
+
+**Not supported, and worth stating plainly.** Mineral prospectivity cannot be done from RGB. Identifying mineralisation needs hyperspectral or multispectral sensing across bands this pipeline does not have — three visible channels cannot distinguish ore-bearing rock from ordinary rock of the same colour. The region-level framework here would generalise to more bands unchanged (the features are computed per region, not per channel), but the framework is not the missing piece; the sensor is. Similarly, energy infrastructure can only be inferred here through proxies like structure and road adjacency, not sensed directly.
+
+The honest summary: this makes a good **feature and interpretability layer** for a siting or land-preparation model, and it is not a substitute for the spectral data that a minerals or energy question actually requires.
 
 ---
 
