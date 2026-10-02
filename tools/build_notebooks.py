@@ -41,9 +41,9 @@ def _repo_root():
 
 sys.path.insert(0, str(_repo_root()))
 from nbtools.bootstrap import setup
-from nbtools import scenes, display
 
-tk = setup()'''
+tk = setup()                           # installs anything missing, first
+from nbtools import scenes, display    # these need cv2/matplotlib, so: after'''
 
 BADGE = ("[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)]"
          "(https://colab.research.google.com/github/" + REPO + "/blob/main/notebooks/{f})")
