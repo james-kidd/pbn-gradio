@@ -1,9 +1,13 @@
 # Region Toolkit — Notebooks
 
-Runnable demonstrations of the region-segmentation toolkit in
-[`james-kidd/pbn-gradio`](https://github.com/james-kidd/pbn-gradio): take an
-image, cut it into regions, then do something with them — render a
-paint-by-number template, price land, or plan where to build next.
+Runnable demonstrations of the region-segmentation toolkit that lives one
+directory up: take an image, cut it into regions, then do something with them
+— render a paint-by-number template, price land, or plan where to build next.
+
+These notebooks ship *inside* the toolkit repository, under `demos/`. That is
+the arrangement that makes the Colab path simple: one clone supplies both the
+notebooks and the code they exercise, so there is no second repository to keep
+in step.
 
 Every notebook runs **in Colab with one click** or **locally from a terminal**,
 and calls the toolkit's real functions rather than a simplified retelling of
@@ -16,12 +20,12 @@ anything.
 
 | | Notebook | What it demonstrates | |
 |---|---|---|---|
-| 01 | [Quickstart](notebooks/01_quickstart.ipynb) | Image → regions in two calls, then check the result is structurally sound | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-notebooks/blob/main/notebooks/01_quickstart.ipynb) |
-| 02 | [Segmentation backends](notebooks/02_segmentation_backends.ipynb) | SLIC vs Felzenszwalb vs watershed — and why RAG merging is **not** one of them | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-notebooks/blob/main/notebooks/02_segmentation_backends.ipynb) |
-| 03 | [Paint by number](notebooks/03_paint_by_number.ipynb) | The original application, stage by stage, with the palette-size trade-off | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-notebooks/blob/main/notebooks/03_paint_by_number.ipynb) |
-| 04 | [Land use and features](notebooks/04_land_use_and_features.ipynb) | Labelling, costing, the feature ablation, and the export a model would train on | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-notebooks/blob/main/notebooks/04_land_use_and_features.ipynb) |
-| 05 | [Topology invariants](notebooks/05_topology_invariants.ipynb) | Planar-graph checks used as a **test oracle** — fed deliberately broken input | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-notebooks/blob/main/notebooks/05_topology_invariants.ipynb) |
-| 06 | [Siting and LP](notebooks/06_siting_and_lp.ipynb) | Least-cost corridor routing, sequencing value, and a proof the greedy plan is near-optimal | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-notebooks/blob/main/notebooks/06_siting_and_lp.ipynb) |
+| 01 | [Quickstart](notebooks/01_quickstart.ipynb) | Image → regions in two calls, then check the result is structurally sound | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/01_quickstart.ipynb) |
+| 02 | [Segmentation backends](notebooks/02_segmentation_backends.ipynb) | SLIC vs Felzenszwalb vs watershed — and why RAG merging is **not** one of them | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/02_segmentation_backends.ipynb) |
+| 03 | [Paint by number](notebooks/03_paint_by_number.ipynb) | The original application, stage by stage, with the palette-size trade-off | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/03_paint_by_number.ipynb) |
+| 04 | [Land use and features](notebooks/04_land_use_and_features.ipynb) | Labelling, costing, the feature ablation, and the export a model would train on | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/04_land_use_and_features.ipynb) |
+| 05 | [Topology invariants](notebooks/05_topology_invariants.ipynb) | Planar-graph checks used as a **test oracle** — fed deliberately broken input | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/05_topology_invariants.ipynb) |
+| 06 | [Siting and LP](notebooks/06_siting_and_lp.ipynb) | Least-cost corridor routing, sequencing value, and a proof the greedy plan is near-optimal | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/06_siting_and_lp.ipynb) |
 
 Each is standalone. None depends on having run the others.
 
@@ -37,15 +41,15 @@ anything missing, and reports what it found. Nothing else to set up.
 ### Terminal
 
 ```bash
-git clone https://github.com/james-kidd/pbn-notebooks.git
-cd pbn-notebooks
+git clone -b claude/notebook-demos https://github.com/james-kidd/pbn-gradio.git
+cd pbn-gradio/demos
 pip install -r requirements.txt
 jupyter lab                 # then open notebooks/01_quickstart.ipynb
 ```
 
-The bootstrap looks for an existing toolkit checkout before cloning one, so if
-you already have `pbn-gradio` beside this repo it will use that — handy when
-you are changing the toolkit and want the notebooks to exercise your edits.
+The bootstrap walks up from the notebook to find the toolkit, so it picks up
+whatever is in the checkout you are sitting in — edit `../segmenters.py` and
+the next cell run exercises your change.
 
 To run them all headlessly and confirm nothing is broken:
 
@@ -64,8 +68,9 @@ everything is already there and cloning again would be wrong.
 
 1. **Install only what is missing.** Nothing is upgraded — silently changing a
    working environment's package versions is the kind of help nobody asked for.
-2. **Find or clone the toolkit.** Checks the working directory, its parents and
-   its siblings for a checkout; clones the pinned branch only if there is none.
+2. **Find the toolkit.** Checks the working directory, its parents and its
+   siblings. Since the notebooks live inside the toolkit repo, this normally
+   finds it one level up and clones nothing.
 3. **Stub Gradio if absent** (see below).
 4. **Import the modules** and return them on one object, so a notebook says
    `tk.segmenters.segment(...)`.
@@ -117,14 +122,17 @@ and explains the reason.
 ## Layout
 
 ```
-nbtools/
-  bootstrap.py    find-or-clone the toolkit, install deps, stub gradio
-  scenes.py       synthetic demo scenes with known ground truth
-  display.py      image grids and Markdown tables, no chart layer
-notebooks/        the six notebooks, with outputs committed
-tools/
-  build_notebooks.py   regenerates every notebook from one file
-run_all.sh        execute every notebook headlessly
+pbn-gradio/
+  segmenters.py geo.py topology.py optimize.py …   the toolkit
+  demos/
+    nbtools/
+      bootstrap.py    find the toolkit, install deps, stub gradio
+      scenes.py       synthetic demo scenes with known ground truth
+      display.py      image grids and Markdown tables, no chart layer
+    notebooks/        the six notebooks, with outputs committed
+    tools/
+      build_notebooks.py   regenerates every notebook from one file
+    run_all.sh        execute every notebook headlessly
 ```
 
 The notebooks are generated rather than hand-edited. Two reasons that is worth
@@ -155,14 +163,21 @@ trusting any class.
 
 ---
 
-## A note on the source branch
+## A note on the branch
 
-The toolkit currently lives on the branch of an open pull request
-([pbn-gradio#2](https://github.com/james-kidd/pbn-gradio/pull/2)), and
-`nbtools/bootstrap.py` pins it:
+Both the toolkit and these demos currently live on `claude/notebook-demos`,
+which branches off the work in
+[pbn-gradio#2](https://github.com/james-kidd/pbn-gradio/pull/2). `main` is
+untouched.
 
-```python
-SOURCE_BRANCH = "claude/area-labeling-potential-use-z9ex0w"
-```
+Three places name that branch, and all three need the same edit when the work
+lands on `main`:
 
-Change that to `"main"` once the PR merges. It is the only edit needed.
+| File | Constant |
+|---|---|
+| `nbtools/bootstrap.py` | `SOURCE_BRANCH` |
+| `tools/build_notebooks.py` | `BRANCH` (drives the Colab badges and the clone) |
+| this README | the clone command above |
+
+Changing `BRANCH` and re-running `python tools/build_notebooks.py` fixes every
+notebook at once, which is most of why the generator exists.

@@ -19,34 +19,40 @@ import textwrap
 OUT = pathlib.Path(__file__).resolve().parent.parent / "notebooks"
 OUT.mkdir(parents=True, exist_ok=True)
 
-REPO = "james-kidd/pbn-notebooks"
+REPO = "james-kidd/pbn-gradio"
+BRANCH = "claude/notebook-demos"
 
-# The first cell of every notebook. In Colab nothing is on disk, so it clones;
-# locally it walks up from the notebook and finds the repo it already lives in.
+# The first cell of every notebook. In Colab nothing is on disk, so it clones
+# the toolkit repo — these notebooks live inside it, under `demos/`, so that
+# single clone supplies both `nbtools` and the toolkit itself. Locally it walks
+# up from the notebook and finds the checkout it is already sitting in.
 BOOT = '''\
 # Bootstrap: clones what it needs in Colab, finds what exists locally.
 import pathlib, subprocess, sys
 
-def _repo_root():
+REPO = "https://github.com/''' + REPO + '''.git"
+BRANCH = "''' + BRANCH + '''"
+
+def _demos_root():
     for base in [pathlib.Path.cwd(), *pathlib.Path.cwd().parents]:
         if (base / "nbtools" / "bootstrap.py").exists():
             return base
-    dest = (pathlib.Path("/content/pbn-notebooks") if pathlib.Path("/content").is_dir()
-            else pathlib.Path.cwd() / "pbn-notebooks")
-    if not (dest / "nbtools").exists():
+    dest = (pathlib.Path("/content/pbn-gradio") if pathlib.Path("/content").is_dir()
+            else pathlib.Path.cwd() / "pbn-gradio")
+    if not (dest / "demos" / "nbtools").exists():
         subprocess.run(["git", "clone", "--depth", "1", "--quiet",
-                        "https://github.com/''' + REPO + '''.git", str(dest)],
-                       check=True)
-    return dest
+                        "--branch", BRANCH, REPO, str(dest)], check=True)
+    return dest / "demos"
 
-sys.path.insert(0, str(_repo_root()))
+sys.path.insert(0, str(_demos_root()))
 from nbtools.bootstrap import setup
 
 tk = setup()                           # installs anything missing, first
 from nbtools import scenes, display    # these need cv2/matplotlib, so: after'''
 
 BADGE = ("[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)]"
-         "(https://colab.research.google.com/github/" + REPO + "/blob/main/notebooks/{f})")
+         "(https://colab.research.google.com/github/" + REPO + "/blob/"
+         + BRANCH + "/demos/notebooks/{f})")
 
 
 def md(s):

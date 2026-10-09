@@ -6,6 +6,10 @@ on disk, the toolkit is not installed, and the runtime resets on every restart.
 A terminal has the opposite problem — everything is already there and cloning
 again would be wrong. `setup()` handles both by looking before it fetches.
 
+These notebooks live inside the toolkit repository, under `demos/`, so the
+clone the notebook's own bootstrap cell performs already contains the toolkit
+— `find_source()` walks up and finds it, and nothing is fetched twice.
+
 It also works around one real coupling in the source repo. `pipeline.py`
 imports Gradio at module scope, so importing *any* of the compute layer drags
 in the whole web-UI dependency — about a hundred megabytes that a notebook has
@@ -28,10 +32,11 @@ import sys
 import types
 from dataclasses import dataclass, field
 
-# The toolkit currently lives on the branch of an open pull request. Point
-# these at `main` once it merges — that is the only edit needed here.
+# Only used if the toolkit is somehow not already on disk — normally it is,
+# because these notebooks ship inside it. Point `SOURCE_BRANCH` at `main` once
+# the work merges there.
 SOURCE_REPO = "https://github.com/james-kidd/pbn-gradio.git"
-SOURCE_BRANCH = "claude/area-labeling-potential-use-z9ex0w"
+SOURCE_BRANCH = "claude/notebook-demos"
 
 # Import-name → pip-name, for the few that differ.
 REQUIRED = {
