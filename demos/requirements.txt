@@ -1,0 +1,14 @@
+# Local / terminal use. Colab already has most of these.
+# The toolkit itself is fetched by nbtools.bootstrap, not pip-installed —
+# pbn-gradio has no packaging metadata, so there is nothing to install.
+numpy
+scipy
+scikit-image>=0.20
+scikit-learn
+opencv-python-headless
+matplotlib
+
+# Notebook runtime. Not needed in Colab.
+jupyterlab
+ipykernel
+nbconvert
