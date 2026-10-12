@@ -14,10 +14,11 @@ All color operations are performed in CIELAB space for perceptual uniformity.
 import numpy as np
 import cv2
 import gradio as gr
-from skimage import color, segmentation, graph, morphology
-from skimage.segmentation import felzenszwalb
+from skimage import color, segmentation
 from skimage.measure import label as cc_label, regionprops
 from sklearn.cluster import KMeans
+
+import segmenters
 
 
 # ── 1. Preprocessing ──────────────────────────────────────────
@@ -61,31 +62,27 @@ def segment_image(
     method: str,
 ) -> tuple[np.ndarray, int]:
     """
-    Segment the image into superpixels then merge adjacent similar regions.
+    Segment the image into regions, then merge adjacent similar ones.
 
-    SLIC clusters pixels in the joint 5D LAB+XY space. The compactness
-    parameter controls the trade-off between color adherence and spatial
-    regularity. A Region Adjacency Graph is then built and regions whose
-    mean-color distance falls below rag_merge_thresh are collapsed.
+    Thin wrapper over `segmenters.segment`, kept for the existing call sites.
+    The backend (SLIC, Felzenszwalb, watershed) decides how regions are found;
+    RAG merging is a separate stage that now runs for *every* backend. It
+    previously ran only after SLIC, which meant the merge threshold silently did
+    nothing when Felzenszwalb was selected.
+
+    See `segmenters` for the composable form and for guidance on which backend
+    suits which application.
     """
-    if method == "felzenszwalb":
-        scale = max(50, 400 - n_superpixels / 10)
-        labels = felzenszwalb(img_lab, scale=scale, sigma=0.5, min_size=min_area)
-    else:
-        labels = segmentation.slic(
-            img_lab, n_segments=n_superpixels,
-            compactness=compactness, sigma=sigma, start_label=1,
-        )
-        g = graph.rag_mean_color(img_lab, labels, mode="distance")
-        labels = graph.cut_threshold(labels, g, thresh=rag_merge_thresh)
-
-    try:
-        labels = morphology.remove_small_objects(labels, max_size=min_area)
-    except TypeError:
-        labels = morphology.remove_small_objects(labels, min_size=min_area)
-
-    labels, _, _ = segmentation.relabel_sequential(labels)
-    return labels, min_area
+    result = segmenters.segment(
+        img_lab,
+        backend=method if method in segmenters.BACKENDS else "slic",
+        merge_threshold=rag_merge_thresh,
+        min_area=min_area,
+        n_segments=n_superpixels,
+        compactness=compactness,
+        sigma=sigma,
+    )
+    return result.labels, min_area
 
 
 # ── 3. Palette Extraction ─────────────────────────────────────
