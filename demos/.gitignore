@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+# A toolkit checkout cloned beside the notebooks by the bootstrap.
+pbn-gradio/
