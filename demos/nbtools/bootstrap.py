@@ -33,10 +33,9 @@ import types
 from dataclasses import dataclass, field
 
 # Only used if the toolkit is somehow not already on disk — normally it is,
-# because these notebooks ship inside it. Point `SOURCE_BRANCH` at `main` once
-# the work merges there.
+# because these notebooks ship inside it.
 SOURCE_REPO = "https://github.com/james-kidd/pbn-gradio.git"
-SOURCE_BRANCH = "claude/notebook-demos"
+SOURCE_BRANCH = "main"
 
 # Import-name → pip-name, for the few that differ.
 REQUIRED = {

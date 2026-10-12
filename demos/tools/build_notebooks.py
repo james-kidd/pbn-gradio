@@ -20,7 +20,7 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "notebooks"
 OUT.mkdir(parents=True, exist_ok=True)
 
 REPO = "james-kidd/pbn-gradio"
-BRANCH = "claude/notebook-demos"
+BRANCH = "main"
 
 # The first cell of every notebook. In Colab nothing is on disk, so it clones
 # the toolkit repo — these notebooks live inside it, under `demos/`, so that
@@ -55,6 +55,39 @@ BADGE = ("[![Open In Colab](https://colab.research.google.com/assets/colab-badge
          + BRANCH + "/demos/notebooks/{f})")
 
 
+# Title and one-line summary per notebook, used for the README's table. That
+# table used to hold its own hand-written copy of all six badge URLs, so
+# changing `BRANCH` and re-running this file fixed the badges inside the
+# notebooks and silently left the README pointing at the old branch.
+# Generating it from here makes `BRANCH` above the only place the name lives.
+NOTEBOOKS = [
+    ("01", "01_quickstart.ipynb", "Quickstart",
+     "Image \u2192 regions in two calls, then check the result is structurally "
+     "sound"),
+    ("02", "02_segmentation_backends.ipynb", "Segmentation backends",
+     "SLIC vs Felzenszwalb vs watershed \u2014 and why RAG merging is **not** "
+     "one of them"),
+    ("03", "03_paint_by_number.ipynb", "Paint by number",
+     "The original application, stage by stage, with the palette-size "
+     "trade-off"),
+    ("04", "04_land_use_and_features.ipynb", "Land use and features",
+     "Labelling, costing, the feature ablation, and the export a model would "
+     "train on"),
+    ("05", "05_topology_invariants.ipynb", "Topology invariants",
+     "Planar-graph checks used as a **test oracle** \u2014 fed deliberately "
+     "broken input"),
+    ("06", "06_siting_and_lp.ipynb", "Siting and LP",
+     "Least-cost corridor routing, sequencing value, and a proof the greedy "
+     "plan is near-optimal"),
+]
+
+README = pathlib.Path(__file__).resolve().parent.parent / "README.md"
+TABLE_START = "<!-- notebooks:start -->"
+TABLE_END = "<!-- notebooks:end -->"
+
+_written = []
+
+
 def md(s):
     return {"cell_type": "markdown", "metadata": {},
             "source": textwrap.dedent(s).strip().splitlines(True)}
@@ -77,7 +110,51 @@ def write(name, cells):
         "nbformat": 4, "nbformat_minor": 0,
     }
     (OUT / name).write_text(json.dumps(nb, indent=1) + "\n")
+    _written.append(name)
     print("wrote", name)
+
+
+def write_readme_table():
+    """Replace the README's notebook table, between its two markers.
+
+    Only the table is generated; the surrounding prose stays hand-written,
+    which is the point of splicing a region rather than emitting the whole
+    file from Python.
+    """
+    listed = [n for _, n, _, _ in NOTEBOOKS]
+    if listed != _written:
+        raise SystemExit(
+            "NOTEBOOKS and the notebooks actually written disagree:\n"
+            f"  registry: {listed}\n  written:  {_written}"
+        )
+
+    rows = [
+        "<!-- generated: edit NOTEBOOKS in tools/build_notebooks.py, not here -->",
+        "| | Notebook | What it demonstrates | |",
+        "|---|---|---|---|",
+    ]
+    for num, name, title, blurb in NOTEBOOKS:
+        rows.append(
+            f"| {num} | [{title}](notebooks/{name}) | {blurb} | "
+            f"{BADGE.format(f=name)} |"
+        )
+
+    text = README.read_text()
+    before, marker, rest = text.partition(TABLE_START)
+    _, end_marker, after = rest.partition(TABLE_END)
+    if not marker or not end_marker:
+        raise SystemExit(
+            f"{README} is missing the {TABLE_START} / {TABLE_END} markers."
+        )
+    README.write_text(
+        before + marker + "\n" + "\n".join(rows) + "\n" + end_marker + after
+    )
+    print("wrote", README.name, "(notebook table)")
+    print(
+        "\nThese notebooks have no outputs yet — this file writes templates.\n"
+        "Run ./run_all.sh before committing, or the committed notebooks render\n"
+        "blank on GitHub."
+    )
 
 
 # ── 01 quickstart ────────────────────────────────────────────
@@ -959,3 +1036,5 @@ write("06_siting_and_lp.ipynb", [
     choose one.
     """),
 ])
+
+write_readme_table()

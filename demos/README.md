@@ -18,14 +18,17 @@ anything.
 
 ## The notebooks
 
+<!-- notebooks:start -->
+<!-- generated: edit NOTEBOOKS in tools/build_notebooks.py, not here -->
 | | Notebook | What it demonstrates | |
 |---|---|---|---|
-| 01 | [Quickstart](notebooks/01_quickstart.ipynb) | Image → regions in two calls, then check the result is structurally sound | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/01_quickstart.ipynb) |
-| 02 | [Segmentation backends](notebooks/02_segmentation_backends.ipynb) | SLIC vs Felzenszwalb vs watershed — and why RAG merging is **not** one of them | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/02_segmentation_backends.ipynb) |
-| 03 | [Paint by number](notebooks/03_paint_by_number.ipynb) | The original application, stage by stage, with the palette-size trade-off | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/03_paint_by_number.ipynb) |
-| 04 | [Land use and features](notebooks/04_land_use_and_features.ipynb) | Labelling, costing, the feature ablation, and the export a model would train on | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/04_land_use_and_features.ipynb) |
-| 05 | [Topology invariants](notebooks/05_topology_invariants.ipynb) | Planar-graph checks used as a **test oracle** — fed deliberately broken input | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/05_topology_invariants.ipynb) |
-| 06 | [Siting and LP](notebooks/06_siting_and_lp.ipynb) | Least-cost corridor routing, sequencing value, and a proof the greedy plan is near-optimal | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/claude/notebook-demos/demos/notebooks/06_siting_and_lp.ipynb) |
+| 01 | [Quickstart](notebooks/01_quickstart.ipynb) | Image → regions in two calls, then check the result is structurally sound | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/main/demos/notebooks/01_quickstart.ipynb) |
+| 02 | [Segmentation backends](notebooks/02_segmentation_backends.ipynb) | SLIC vs Felzenszwalb vs watershed — and why RAG merging is **not** one of them | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/main/demos/notebooks/02_segmentation_backends.ipynb) |
+| 03 | [Paint by number](notebooks/03_paint_by_number.ipynb) | The original application, stage by stage, with the palette-size trade-off | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/main/demos/notebooks/03_paint_by_number.ipynb) |
+| 04 | [Land use and features](notebooks/04_land_use_and_features.ipynb) | Labelling, costing, the feature ablation, and the export a model would train on | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/main/demos/notebooks/04_land_use_and_features.ipynb) |
+| 05 | [Topology invariants](notebooks/05_topology_invariants.ipynb) | Planar-graph checks used as a **test oracle** — fed deliberately broken input | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/main/demos/notebooks/05_topology_invariants.ipynb) |
+| 06 | [Siting and LP](notebooks/06_siting_and_lp.ipynb) | Least-cost corridor routing, sequencing value, and a proof the greedy plan is near-optimal | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/james-kidd/pbn-gradio/blob/main/demos/notebooks/06_siting_and_lp.ipynb) |
+<!-- notebooks:end -->
 
 Each is standalone. None depends on having run the others.
 
@@ -41,7 +44,7 @@ anything missing, and reports what it found. Nothing else to set up.
 ### Terminal
 
 ```bash
-git clone -b claude/notebook-demos https://github.com/james-kidd/pbn-gradio.git
+git clone https://github.com/james-kidd/pbn-gradio.git
 cd pbn-gradio/demos
 pip install -r requirements.txt
 jupyter lab                 # then open notebooks/01_quickstart.ipynb
@@ -165,19 +168,30 @@ trusting any class.
 
 ## A note on the branch
 
-Both the toolkit and these demos currently live on `claude/notebook-demos`,
-which branches off the work in
-[pbn-gradio#2](https://github.com/james-kidd/pbn-gradio/pull/2). `main` is
-untouched.
+Everything here lives on `main`, and the Colab badges point there, so a badge
+keeps working after the branch that introduced a change is deleted.
 
-Three places name that branch, and all three need the same edit when the work
-lands on `main`:
+Two constants name it:
 
 | File | Constant |
 |---|---|
-| `nbtools/bootstrap.py` | `SOURCE_BRANCH` |
-| `tools/build_notebooks.py` | `BRANCH` (drives the Colab badges and the clone) |
-| this README | the clone command above |
+| `tools/build_notebooks.py` | `BRANCH` — drives every Colab badge |
+| `nbtools/bootstrap.py` | `SOURCE_BRANCH` — the fallback clone |
 
-Changing `BRANCH` and re-running `python tools/build_notebooks.py` fixes every
-notebook at once, which is most of why the generator exists.
+To point the notebooks at a feature branch while reviewing one, change
+`BRANCH` and re-run `python tools/build_notebooks.py`: one edit retargets all
+six notebook badges **and the table above**, which is most of why the
+generator exists. Change it back before merging — a badge aimed at a branch
+dies when the branch does.
+
+The table above used to hold its own hand-written copies of those URLs, which
+meant changing `BRANCH` fixed the badges inside the notebooks and left this
+table pointing at the old branch — a trap that caught the first retarget, one
+grep after it looked finished. It is generated now, from `NOTEBOOKS` in the
+same file.
+
+Neither constant is read on the ordinary path. The badge only has to name a
+ref that still exists on GitHub, and `SOURCE_BRANCH` is reached only if the
+toolkit is somehow not on disk, which cannot happen when the notebook was
+opened from a clone of this repository. They matter when something has already
+gone sideways, which is exactly when a stale branch name is least welcome.
